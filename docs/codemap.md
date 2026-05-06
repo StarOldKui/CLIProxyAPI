@@ -76,7 +76,7 @@
   `Gin route -> AuthMiddleware -> sdk/api handler -> BaseAPIHandler -> coreauth.Manager -> provider executor -> sdk/translator -> upstream provider -> translator -> HTTP/SSE/WebSocket response`.
 - `BaseAPIHandler` passes cloned inbound HTTP headers into executor options so auth selection can use header-derived session affinity, including `X-Session-ID`, `Session_id`, `X-Amp-Thread-Id`, and `X-Client-Request-Id`.
 - Executors translate the request into target provider format, apply `thinking.ApplyThinking`, apply payload/provider config, inject auth and headers, call upstream, translate responses back to the source format, and publish usage.
-- `sdk/cliproxy/usage.Manager` dispatches usage records to registered plugins. The Redis queue plugin includes provider, upstream model, client-requested alias, endpoint, auth type, auth index, API key, request ID, latency, status, and token breakdown in queued records.
+- `sdk/cliproxy/usage.Manager` dispatches usage records to registered plugins. The Redis queue plugin includes provider, upstream model, client-requested alias, endpoint, auth type, auth index, API key, request ID, latency, status, error message for failed attempts, and token breakdown in queued records.
 - Built-in request access accepts configured `api-keys` from `Authorization`, `X-Goog-Api-Key`, `X-Api-Key`, query `key`, or query `auth_token`.
 - `AuthMiddleware` allows requests through when no access providers are registered. This is compatibility behavior, not proof that an endpoint has no auth concerns.
 
@@ -90,7 +90,7 @@
 - Watcher monitors the selected config path and auth directory. Config reload uses debounce and hash checks; auth reload handles same-directory `.json` files.
 - Watcher auth updates flow through `WithSkipPersist()` to avoid writing the same file event back into storage.
 - Store implementations that expose `PersistConfig()` or `PersistAuthFiles()` are used by watcher/management changes to push local mirror updates to the remote backend.
-- `sdk/cliproxy.Service.Run` wires usage collection for CLI and SDK entrypoints. `internal/usage` aggregates records into an in-process snapshot, loads and flushes `usage/usage.json`, and writes the same snapshot to S3-compatible object storage at `usage/usage.json` when `OBJECTSTORE_ENDPOINT` is selected.
+- `sdk/cliproxy.Service.Run` wires usage collection for CLI and SDK entrypoints. `internal/usage` aggregates records, including per-request failed-attempt error messages, into an in-process snapshot, loads and flushes `usage/usage.json`, and writes the same snapshot to S3-compatible object storage at `usage/usage.json` when `OBJECTSTORE_ENDPOINT` is selected.
 - Local Docker Compose maps `./usage` to `/CLIProxyAPI/usage`, matching the config/auth/log volume pattern so file-mode usage snapshots survive container recreation.
 - Object-store usage snapshot restore compares `saved_at` with file/object modified times and keeps the newer local mirror when S3 still has an older snapshot; transient S3 read failures fall back to the local mirror when it is readable.
 - Codex quota refresh stores the latest per-auth snapshot under auth metadata key `codex_quota`; this follows the existing auth-file/store persistence path instead of introducing a separate quota database.

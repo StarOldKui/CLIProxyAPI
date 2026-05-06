@@ -158,13 +158,19 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
 
   const handleRefresh = useCallback(async () => {
     if (sectionLoading || loading || refreshingFiles) return;
+    const refreshScope = viewMode === 'paged' ? 'page' : 'all';
+    const currentPageNames = new Set(pageItems.map((file) => file.name));
     setRefreshingFiles(true);
     try {
       const latestFiles = await onRefreshFiles();
       const matched = latestFiles.filter((file) => config.filterFn(file));
-      const targets = config.sortFiles ? config.sortFiles(matched, quota) : matched;
+      const sortedTargets = config.sortFiles ? config.sortFiles(matched, quota) : matched;
+      const targets =
+        refreshScope === 'page'
+          ? sortedTargets.filter((file) => currentPageNames.has(file.name))
+          : sortedTargets;
       if (targets.length === 0) return;
-      await loadQuota(targets, 'all', setLoading);
+      await loadQuota(targets, refreshScope, setLoading);
     } finally {
       setRefreshingFiles(false);
     }
@@ -173,10 +179,12 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
     loadQuota,
     loading,
     onRefreshFiles,
+    pageItems,
     quota,
     refreshingFiles,
     sectionLoading,
-    setLoading
+    setLoading,
+    viewMode
   ]);
 
   useEffect(() => {
@@ -289,6 +297,11 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
   );
 
   const isRefreshing = sectionLoading || loading || refreshingFiles;
+  const refreshButtonLabel = t(
+    viewMode === 'paged'
+      ? 'quota_management.refresh_current_page_credentials'
+      : 'quota_management.refresh_all_credentials'
+  );
   const groups = useMemo(
     () =>
       config.groupFiles
@@ -331,11 +344,11 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
             onClick={handleRefresh}
             disabled={disabled || isRefreshing}
             loading={isRefreshing}
-            title={t('quota_management.refresh_all_credentials')}
-            aria-label={t('quota_management.refresh_all_credentials')}
+            title={refreshButtonLabel}
+            aria-label={refreshButtonLabel}
           >
             {!isRefreshing && <IconRefreshCw size={16} />}
-            {t('quota_management.refresh_all_credentials')}
+            {refreshButtonLabel}
           </Button>
         </div>
       }

@@ -1228,6 +1228,7 @@
     "refresh_files": "Refresh auth files",
     "refresh_files_and_quota": "Refresh files & quota",
     "refresh_all_credentials": "Refresh all credentials",
+    "refresh_current_page_credentials": "Refresh current page",
     "card_idle_hint": "Use the top \"Refresh all credentials\" button to fetch the latest quota data."
   },
   "system_info": {
@@ -1447,11 +1448,12 @@
     "request_events_title": "Request Events",
     "request_events_filter_model": "Model",
     "request_events_filter_source": "Source",
-    "request_events_filter_auth_index": "Auth Index",
+    "request_events_filter_auth_index": "Credential ID",
     "request_events_timestamp": "Timestamp",
     "request_events_source": "Source",
-    "request_events_auth_index": "Auth Index",
+    "request_events_auth_index": "Credential ID",
     "request_events_result": "Result",
+    "error_message": "Error",
     "thinking_intensity": "Thinking",
     "thinking_mode": "Thinking Mode",
     "thinking_level": "Thinking Level",

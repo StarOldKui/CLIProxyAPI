@@ -29,6 +29,7 @@ interface SelectProps {
   ariaDescribedBy?: string;
   fullWidth?: boolean;
   id?: string;
+  dropdownMinWidth?: number;
 }
 
 const VIEWPORT_MARGIN = 8;
@@ -38,11 +39,12 @@ const DROPDOWN_Z_INDEX = 2010;
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-const resolveDropdownStyle = (element: HTMLElement): CSSProperties => {
+const resolveDropdownStyle = (element: HTMLElement, dropdownMinWidth = 0): CSSProperties => {
   const rect = element.getBoundingClientRect();
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
-  const width = Math.min(rect.width, Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2));
+  const viewportMaxWidth = Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2);
+  const width = Math.min(Math.max(rect.width, dropdownMinWidth), viewportMaxWidth);
   const left = clamp(
     rect.left,
     VIEWPORT_MARGIN,
@@ -88,6 +90,7 @@ export function Select({
   ariaDescribedBy,
   fullWidth = true,
   id,
+  dropdownMinWidth,
 }: SelectProps) {
   const generatedId = useId();
   const selectId = id ?? generatedId;
@@ -113,8 +116,8 @@ export function Select({
 
   const updateDropdownStyle = useCallback(() => {
     if (!wrapRef.current) return;
-    setDropdownStyle(resolveDropdownStyle(wrapRef.current));
-  }, []);
+    setDropdownStyle(resolveDropdownStyle(wrapRef.current, dropdownMinWidth));
+  }, [dropdownMinWidth]);
 
   const scheduleDropdownStyleUpdate = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -280,6 +283,7 @@ export function Select({
                   role="option"
                   aria-selected={active}
                   className={`${styles.option} ${active ? styles.optionActive : ''} ${highlighted ? styles.optionHighlighted : ''}`.trim()}
+                  title={opt.label}
                   onMouseEnter={() => setHighlightedIndex(index)}
                   onKeyDown={handleKeyDown}
                   onClick={() => commitSelection(index)}

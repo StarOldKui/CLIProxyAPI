@@ -2,6 +2,7 @@ package helps
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -118,6 +119,22 @@ func TestUsageReporterBuildRecordIncludesRequestedModelAlias(t *testing.T) {
 	}
 	if record.Alias != "client-gpt" {
 		t.Fatalf("alias = %q, want %q", record.Alias, "client-gpt")
+	}
+}
+
+func TestNormalizeUsageErrorMessageTrimsAndCaps(t *testing.T) {
+	message := normalizeUsageErrorMessage(errors.New("  upstream rejected token  "))
+	if message != "upstream rejected token" {
+		t.Fatalf("message = %q, want trimmed error", message)
+	}
+
+	longMessage := make([]byte, 5000)
+	for i := range longMessage {
+		longMessage[i] = 'x'
+	}
+	message = normalizeUsageErrorMessage(errors.New(string(longMessage)))
+	if len(message) != 4096 {
+		t.Fatalf("message len = %d, want 4096", len(message))
 	}
 }
 

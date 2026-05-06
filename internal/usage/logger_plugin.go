@@ -90,12 +90,13 @@ type modelStats struct {
 
 // RequestDetail stores the timestamp, latency, and token usage for a single request.
 type RequestDetail struct {
-	Timestamp time.Time  `json:"timestamp"`
-	LatencyMs int64      `json:"latency_ms"`
-	Source    string     `json:"source"`
-	AuthIndex string     `json:"auth_index"`
-	Tokens    TokenStats `json:"tokens"`
-	Failed    bool       `json:"failed"`
+	Timestamp    time.Time  `json:"timestamp"`
+	LatencyMs    int64      `json:"latency_ms"`
+	Source       string     `json:"source"`
+	AuthIndex    string     `json:"auth_index"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	Tokens       TokenStats `json:"tokens"`
+	Failed       bool       `json:"failed"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -199,12 +200,13 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 		s.apis[statsKey] = stats
 	}
 	s.updateAPIStats(stats, modelName, RequestDetail{
-		Timestamp: timestamp,
-		LatencyMs: normaliseLatency(record.Latency),
-		Source:    record.Source,
-		AuthIndex: record.AuthIndex,
-		Tokens:    detail,
-		Failed:    failed,
+		Timestamp:    timestamp,
+		LatencyMs:    normaliseLatency(record.Latency),
+		Source:       record.Source,
+		AuthIndex:    record.AuthIndex,
+		ErrorMessage: normalizeErrorMessage(record.ErrorMessage),
+		Tokens:       detail,
+		Failed:       failed,
 	})
 
 	s.requestsByDay[dayKey]++
@@ -388,12 +390,13 @@ func dedupKey(apiName, modelName string, detail RequestDetail) string {
 	timestamp := detail.Timestamp.UTC().Format(time.RFC3339Nano)
 	tokens := normaliseTokenStats(detail.Tokens)
 	return fmt.Sprintf(
-		"%s|%s|%s|%s|%s|%t|%d|%d|%d|%d|%d",
+		"%s|%s|%s|%s|%s|%s|%t|%d|%d|%d|%d|%d",
 		apiName,
 		modelName,
 		timestamp,
 		detail.Source,
 		detail.AuthIndex,
+		normalizeErrorMessage(detail.ErrorMessage),
 		detail.Failed,
 		tokens.InputTokens,
 		tokens.OutputTokens,
@@ -450,6 +453,10 @@ func normaliseTokenStats(tokens TokenStats) TokenStats {
 		tokens.TotalTokens = tokens.InputTokens + tokens.OutputTokens + tokens.ReasoningTokens + tokens.CachedTokens
 	}
 	return tokens
+}
+
+func normalizeErrorMessage(message string) string {
+	return strings.TrimSpace(message)
 }
 
 func normaliseLatency(latency time.Duration) int64 {

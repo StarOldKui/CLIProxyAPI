@@ -40,6 +40,7 @@ type RequestEventRow = {
   latencyMs: number | null;
   thinking: UsageThinking | null;
   thinkingLabel: string;
+  errorMessage: string;
   inputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
@@ -193,6 +194,7 @@ export function RequestEventsDetailsCard({
       const latencyMs = extractLatencyMs(detail);
       const thinking = detail.thinking ?? null;
       const thinkingLabel = formatThinkingLabel(thinking);
+      const errorMessage = typeof detail.error_message === 'string' ? detail.error_message.trim() : '';
 
       return {
         id: `${timestamp}-${model}-${sourceKey}-${authIndex}-${index}`,
@@ -209,6 +211,7 @@ export function RequestEventsDetailsCard({
         latencyMs,
         thinking,
         thinkingLabel,
+        errorMessage,
         inputTokens,
         outputTokens,
         reasoningTokens,
@@ -360,6 +363,7 @@ export function RequestEventsDetailsCard({
       'reasoning_tokens',
       'cached_tokens',
       'total_tokens',
+      'error_message',
     ];
 
     const csvRows = filteredRows.map((row) =>
@@ -380,6 +384,7 @@ export function RequestEventsDetailsCard({
         row.reasoningTokens,
         row.cachedTokens,
         row.totalTokens,
+        row.errorMessage,
       ]
         .map((value) => encodeCsv(value))
         .join(',')
@@ -412,6 +417,7 @@ export function RequestEventsDetailsCard({
         cached_tokens: row.cachedTokens,
         total_tokens: row.totalTokens,
       },
+      error_message: row.errorMessage,
     }));
 
     const content = JSON.stringify(payload, null, 2);
@@ -466,6 +472,7 @@ export function RequestEventsDetailsCard({
             className={styles.requestEventsSelect}
             ariaLabel={t('usage_stats.request_events_filter_model')}
             fullWidth={false}
+            dropdownMinWidth={220}
           />
         </div>
         <div className={styles.requestEventsFilterItem}>
@@ -479,6 +486,7 @@ export function RequestEventsDetailsCard({
             className={styles.requestEventsSelect}
             ariaLabel={t('usage_stats.request_events_filter_source')}
             fullWidth={false}
+            dropdownMinWidth={360}
           />
         </div>
         <div className={styles.requestEventsFilterItem}>
@@ -492,6 +500,7 @@ export function RequestEventsDetailsCard({
             className={styles.requestEventsSelect}
             ariaLabel={t('usage_stats.request_events_filter_auth_index')}
             fullWidth={false}
+            dropdownMinWidth={260}
           />
         </div>
       </div>
@@ -539,6 +548,7 @@ export function RequestEventsDetailsCard({
                   <th>{t('usage_stats.reasoning_tokens')}</th>
                   <th>{t('usage_stats.cached_tokens')}</th>
                   <th>{t('usage_stats.total_tokens')}</th>
+                  <th>{t('usage_stats.error_message')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -604,6 +614,9 @@ export function RequestEventsDetailsCard({
                     <td>{row.reasoningTokens.toLocaleString()}</td>
                     <td>{row.cachedTokens.toLocaleString()}</td>
                     <td>{row.totalTokens.toLocaleString()}</td>
+                    <td className={styles.requestEventsErrorMessage} title={row.errorMessage}>
+                      {row.errorMessage || '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -78,7 +78,7 @@ func (r *UsageReporter) buildAdditionalModelRecord(model string, detail usage.De
 }
 
 func (r *UsageReporter) PublishFailure(ctx context.Context) {
-	r.publishWithOutcome(ctx, usage.Detail{}, true)
+	r.publishWithOutcomeMessage(ctx, usage.Detail{}, true, "")
 }
 
 func (r *UsageReporter) TrackFailure(ctx context.Context, errPtr *error) {
@@ -86,18 +86,38 @@ func (r *UsageReporter) TrackFailure(ctx context.Context, errPtr *error) {
 		return
 	}
 	if *errPtr != nil {
-		r.PublishFailure(ctx)
+		r.publishWithOutcomeMessage(ctx, usage.Detail{}, true, normalizeUsageErrorMessage(*errPtr))
 	}
 }
 
 func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Detail, failed bool) {
+	r.publishWithOutcomeMessage(ctx, detail, failed, "")
+}
+
+func (r *UsageReporter) publishWithOutcomeMessage(ctx context.Context, detail usage.Detail, failed bool, errorMessage string) {
 	if r == nil {
 		return
 	}
 	detail = normalizeUsageDetailTotal(detail)
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, r.buildRecord(detail, failed))
+		record := r.buildRecord(detail, failed)
+		if failed {
+			record.ErrorMessage = errorMessage
+		}
+		usage.PublishRecord(ctx, record)
 	})
+}
+
+func normalizeUsageErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	const maxUsageErrorMessageLength = 4096
+	if len(message) > maxUsageErrorMessageLength {
+		message = message[:maxUsageErrorMessageLength]
+	}
+	return message
 }
 
 func normalizeUsageDetailTotal(detail usage.Detail) usage.Detail {
