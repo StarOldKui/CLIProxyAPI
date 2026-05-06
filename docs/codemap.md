@@ -61,6 +61,7 @@
 - The server starts one TCP listener. `internal/api/protocol_multiplexer.go` routes HTTP and TLS-negotiated HTTP connections into the Gin HTTP server, and routes Redis RESP connections into `internal/api/redis_queue_protocol.go` when management routes are enabled.
 - `/healthz` serves GET/HEAD health checks. `/` serves a small JSON endpoint summary. `/management.html` serves the embedded management panel when the control panel is enabled; `MANAGEMENT_STATIC_PATH` can override it with an existing local file, and a missing override falls back to the embedded panel.
 - `/v1` routes serve OpenAI-compatible chat/completions, completions, image generations/edits, Claude messages/count_tokens, OpenAI Responses HTTP, OpenAI Responses WebSocket, Responses compact, and model listing.
+- OpenAI Responses WebSocket handlers subscribe to Codex executor upstream disconnect notifications and close the downstream client connection when the pinned upstream WebSocket session is invalidated.
 - `/backend-api/codex` mirrors the Codex Responses routes for Codex CLI `chatgpt_base_url` compatibility: GET/POST `/responses` and POST `/responses/compact`.
 - `/v1beta` routes serve Gemini-compatible model listing and model actions.
 - `/v1internal:method` serves Gemini CLI internal requests and is gated by `enable-gemini-cli-endpoint`, loopback `RemoteAddr`, and `Host=127.0.0.1`.
