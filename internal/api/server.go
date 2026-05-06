@@ -31,6 +31,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/redisqueue"
+	internalusage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
@@ -311,6 +312,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	redisqueue.SetEnabled(hasManagementSecret)
 	if hasManagementSecret {
 		s.registerManagementRoutes()
+		s.mgmt.StartCodexQuotaAutoRefresh()
 	}
 
 	if optionState.keepAliveEnabled {
@@ -551,7 +553,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
 		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
 		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyUsage)
+		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
+		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
+		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
 		mgmt.GET("/usage-queue", s.mgmt.GetUsageQueue)
+		mgmt.POST("/codex-quota/refresh", s.mgmt.RefreshCodexQuota)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)
@@ -675,6 +681,14 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
+
+	if strings.TrimSpace(os.Getenv("MANAGEMENT_STATIC_PATH")) == "" {
+		if data, ok := managementasset.EmbeddedManagementHTML(); ok {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+			return
+		}
+	}
+
 	filePath := managementasset.FilePath(s.configFilePath)
 	if strings.TrimSpace(filePath) == "" {
 		c.AbortWithStatus(http.StatusNotFound)
@@ -682,18 +696,17 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 	}
 
 	if _, err := os.Stat(filePath); err != nil {
-		if os.IsNotExist(err) {
-			// Synchronously ensure management.html is available with a detached context.
-			// Control panel bootstrap should not be canceled by client disconnects.
-			if !managementasset.EnsureLatestManagementHTML(context.Background(), managementasset.StaticDir(s.configFilePath), cfg.ProxyURL, cfg.RemoteManagement.PanelGitHubRepository) {
-				c.AbortWithStatus(http.StatusNotFound)
-				return
-			}
-		} else {
+		if !os.IsNotExist(err) {
 			log.WithError(err).Error("failed to stat management control panel asset")
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
+		if data, ok := managementasset.EmbeddedManagementHTML(); ok {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+			return
+		}
+		c.AbortWithStatus(http.StatusNotFound)
+		return
 	}
 
 	c.File(filePath)
@@ -911,6 +924,10 @@ func (s *Server) Start() error {
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
 
+	if s.mgmt != nil {
+		s.mgmt.StopCodexQuotaAutoRefresh()
+	}
+
 	if s.keepAliveEnabled {
 		select {
 		case s.keepAliveStop <- struct{}{}:
@@ -999,6 +1016,7 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 
 	if oldCfg == nil || oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
 		redisqueue.SetUsageStatisticsEnabled(cfg.UsageStatisticsEnabled)
+		internalusage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
 	}
 
 	if oldCfg == nil || oldCfg.RedisUsageQueueRetentionSeconds != cfg.RedisUsageQueueRetentionSeconds {
@@ -1062,6 +1080,13 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		}
 	}
 	redisqueue.SetEnabled(s.managementRoutesEnabled.Load())
+	if s.mgmt != nil {
+		if s.managementRoutesEnabled.Load() {
+			s.mgmt.StartCodexQuotaAutoRefresh()
+		} else {
+			s.mgmt.StopCodexQuotaAutoRefresh()
+		}
+	}
 
 	s.applyAccessConfig(oldCfg, cfg)
 	s.cfg = cfg

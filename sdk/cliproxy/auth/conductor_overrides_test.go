@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sync"
 	"testing"
@@ -687,6 +688,73 @@ func TestManager_Execute_DisableCooling_DoesNotBlackoutAfter429RetryAfter(t *tes
 	}
 	if !state.NextRetryAfter.IsZero() {
 		t.Fatalf("expected NextRetryAfter to be zero when disable_cooling=true, got %v", state.NextRetryAfter)
+	}
+}
+
+func TestApplyAuthFailureStatePreservesUsageLimitReachedStatusMessage(t *testing.T) {
+	message := `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"free","resets_at":1778114674,"eligible_promo":null,"resets_in_seconds":161601}}`
+	auth := &Auth{
+		ID:       "auth-usage-limit",
+		Provider: "codex",
+	}
+
+	applyAuthFailureState(auth, &Error{
+		HTTPStatus: http.StatusTooManyRequests,
+		Message:    message,
+	}, nil, time.Now())
+
+	if auth.StatusMessage != message {
+		t.Fatalf("status message = %q, want structured usage limit message", auth.StatusMessage)
+	}
+	var payload struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(auth.StatusMessage), &payload); err != nil {
+		t.Fatalf("status message json: %v", err)
+	}
+	if payload.Error.Type != "usage_limit_reached" {
+		t.Fatalf("error type = %q, want usage_limit_reached", payload.Error.Type)
+	}
+}
+
+func TestManagerMarkResultPreservesUsageLimitReachedStatusMessage(t *testing.T) {
+	message := `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"free","resets_at":1778114674,"eligible_promo":null,"resets_in_seconds":161601}}`
+	m := NewManager(nil, nil, nil)
+	auth := &Auth{
+		ID:       "auth-usage-limit-result",
+		Provider: "codex",
+		Status:   StatusActive,
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "codex",
+		Model:    "gpt-5.5",
+		Success:  false,
+		Error: &Error{
+			HTTPStatus: http.StatusTooManyRequests,
+			Message:    message,
+		},
+	})
+
+	updated, ok := m.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("expected auth to be present")
+	}
+	if updated.StatusMessage != message {
+		t.Fatalf("auth status message = %q, want structured usage limit message", updated.StatusMessage)
+	}
+	state := updated.ModelStates["gpt-5.5"]
+	if state == nil {
+		t.Fatal("expected model state to be present")
+	}
+	if state.StatusMessage != message {
+		t.Fatalf("model status message = %q, want structured usage limit message", state.StatusMessage)
 	}
 }
 

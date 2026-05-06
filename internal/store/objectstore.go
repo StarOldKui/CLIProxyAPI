@@ -25,6 +25,7 @@ import (
 const (
 	objectStoreConfigKey  = "config/config.yaml"
 	objectStoreAuthPrefix = "auths"
+	objectStoreUsageKey   = "usage/usage.json"
 )
 
 // ObjectStoreConfig captures configuration for the object storage-backed token store.
@@ -87,12 +88,16 @@ func NewObjectTokenStore(cfg ObjectStoreConfig) (*ObjectTokenStore, error) {
 
 	configDir := filepath.Join(absRoot, "config")
 	authDir := filepath.Join(absRoot, "auths")
+	usageDir := filepath.Join(absRoot, "usage")
 
 	if err = os.MkdirAll(configDir, 0o700); err != nil {
 		return nil, fmt.Errorf("object store: create config directory: %w", err)
 	}
 	if err = os.MkdirAll(authDir, 0o700); err != nil {
 		return nil, fmt.Errorf("object store: create auth directory: %w", err)
+	}
+	if err = os.MkdirAll(usageDir, 0o700); err != nil {
+		return nil, fmt.Errorf("object store: create usage directory: %w", err)
 	}
 
 	options := &minio.Options{
@@ -136,6 +141,14 @@ func (s *ObjectTokenStore) AuthDir() string {
 		return ""
 	}
 	return s.authDir
+}
+
+// UsageSnapshotPath returns the local mirror path for the usage snapshot.
+func (s *ObjectTokenStore) UsageSnapshotPath() string {
+	if s == nil {
+		return ""
+	}
+	return filepath.Join(s.spoolRoot, "usage", "usage.json")
 }
 
 // Bootstrap ensures the target bucket exists and synchronizes data from the object storage backend.
@@ -322,6 +335,100 @@ func (s *ObjectTokenStore) PersistConfig(ctx context.Context) error {
 		return s.deleteObject(ctx, objectStoreConfigKey)
 	}
 	return s.putObject(ctx, objectStoreConfigKey, data, "application/x-yaml")
+}
+
+// LoadUsageSnapshot fetches the persisted usage snapshot from object storage, falling back to the local mirror.
+func (s *ObjectTokenStore) LoadUsageSnapshot(ctx context.Context) ([]byte, error) {
+	if s == nil {
+		return nil, os.ErrNotExist
+	}
+	localPath := s.UsageSnapshotPath()
+	localData, localModified, localErr := readUsageSnapshotMirror(localPath)
+
+	key := s.prefixedKey(objectStoreUsageKey)
+	info, err := s.client.StatObject(ctx, s.cfg.Bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		if localErr == nil {
+			return localData, nil
+		}
+		if isObjectNotFound(err) {
+			return nil, localErr
+		}
+		return nil, fmt.Errorf("object store: stat usage snapshot: %w", err)
+	}
+	if localErr == nil && localUsageSnapshotNewer(localData, localModified, nil, info.LastModified) {
+		return localData, nil
+	}
+
+	object, errGet := s.client.GetObject(ctx, s.cfg.Bucket, key, minio.GetObjectOptions{})
+	if errGet != nil {
+		if localErr == nil {
+			return localData, nil
+		}
+		return nil, fmt.Errorf("object store: fetch usage snapshot: %w", errGet)
+	}
+	defer object.Close()
+	remoteData, errRead := io.ReadAll(object)
+	if errRead != nil {
+		if localErr == nil {
+			return localData, nil
+		}
+		return nil, fmt.Errorf("object store: read usage snapshot: %w", errRead)
+	}
+
+	if localErr == nil && localUsageSnapshotNewer(localData, localModified, remoteData, info.LastModified) {
+		return localData, nil
+	}
+	if errWrite := writeUsageSnapshotMirror(localPath, remoteData); errWrite != nil {
+		return nil, errWrite
+	}
+	return remoteData, nil
+}
+
+// SaveUsageSnapshot uploads the local usage snapshot to object storage.
+func (s *ObjectTokenStore) SaveUsageSnapshot(ctx context.Context, data []byte) error {
+	if s == nil {
+		return nil
+	}
+	return s.putObject(ctx, objectStoreUsageKey, data, "application/json")
+}
+
+func readUsageSnapshotMirror(path string) ([]byte, time.Time, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return data, info.ModTime(), nil
+}
+
+func writeUsageSnapshotMirror(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("object store: prepare usage snapshot directory: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("object store: write usage snapshot mirror: %w", err)
+	}
+	return nil
+}
+
+func localUsageSnapshotNewer(localData []byte, localModified time.Time, remoteData []byte, remoteModified time.Time) bool {
+	localTime := usageSnapshotTimestamp(localData, localModified)
+	remoteTime := usageSnapshotTimestamp(remoteData, remoteModified)
+	return localTime.After(remoteTime)
+}
+
+func usageSnapshotTimestamp(data []byte, fallback time.Time) time.Time {
+	var file struct {
+		SavedAt time.Time `json:"saved_at"`
+	}
+	if err := json.Unmarshal(data, &file); err == nil && !file.SavedAt.IsZero() {
+		return file.SavedAt
+	}
+	return fallback
 }
 
 func (s *ObjectTokenStore) ensureBucket(ctx context.Context) error {

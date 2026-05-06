@@ -1151,6 +1151,38 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	return auth.Clone(), nil
 }
 
+// Patch updates a single auth entry while holding the manager lock.
+func (m *Manager) Patch(ctx context.Context, id string, patch func(*Auth)) (*Auth, error) {
+	if m == nil || strings.TrimSpace(id) == "" || patch == nil {
+		return nil, nil
+	}
+
+	var snapshot *Auth
+	var errPersist error
+	m.mu.Lock()
+	existing, ok := m.auths[id]
+	if !ok || existing == nil {
+		m.mu.Unlock()
+		return nil, nil
+	}
+	auth := existing.Clone()
+	patch(auth)
+	auth.EnsureIndex()
+	authClone := auth.Clone()
+	m.auths[auth.ID] = authClone
+	errPersist = m.persist(ctx, auth)
+	snapshot = auth.Clone()
+	m.mu.Unlock()
+
+	m.rebuildAPIKeyModelAliasFromRuntimeConfig()
+	if m.scheduler != nil {
+		m.scheduler.upsertAuth(authClone)
+	}
+	m.queueRefreshReschedule(auth.ID)
+	m.hook.OnAuthUpdated(ctx, snapshot.Clone())
+	return snapshot, errPersist
+}
+
 // Load resets manager state from the backing store.
 func (m *Manager) Load(ctx context.Context) error {
 	m.mu.Lock()
@@ -2090,10 +2122,11 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					state.Status = StatusError
 					state.UpdatedAt = now
 					if result.Error != nil {
+						statusMessage := resultStatusMessage(result.Error)
 						state.LastError = cloneError(result.Error)
-						state.StatusMessage = result.Error.Message
+						state.StatusMessage = statusMessage
 						auth.LastError = cloneError(result.Error)
-						auth.StatusMessage = result.Error.Message
+						auth.StatusMessage = statusMessage
 					}
 
 					statusCode := statusCodeFromResult(result.Error)
@@ -2530,8 +2563,8 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	auth.UpdatedAt = now
 	if resultErr != nil {
 		auth.LastError = cloneError(resultErr)
-		if resultErr.Message != "" {
-			auth.StatusMessage = resultErr.Message
+		if statusMessage := resultStatusMessage(resultErr); statusMessage != "" {
+			auth.StatusMessage = statusMessage
 		}
 	}
 	statusCode := statusCodeFromResult(resultErr)
@@ -2558,7 +2591,11 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 			auth.NextRetryAfter = now.Add(12 * time.Hour)
 		}
 	case 429:
-		auth.StatusMessage = "quota exhausted"
+		if statusMessage := usageLimitReachedStatusMessage(auth.StatusMessage); statusMessage != "" {
+			auth.StatusMessage = statusMessage
+		} else {
+			auth.StatusMessage = "quota exhausted"
+		}
 		auth.Quota.Exceeded = true
 		auth.Quota.Reason = "quota"
 		var next time.Time
@@ -2587,6 +2624,35 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 			auth.StatusMessage = "request failed"
 		}
 	}
+}
+
+func resultStatusMessage(resultErr *Error) string {
+	if resultErr == nil {
+		return ""
+	}
+	if statusMessage := usageLimitReachedStatusMessage(resultErr.Message); statusMessage != "" {
+		return statusMessage
+	}
+	return resultErr.Message
+}
+
+func usageLimitReachedStatusMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	var payload struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(message), &payload); err != nil {
+		return ""
+	}
+	if payload.Error.Type != "usage_limit_reached" {
+		return ""
+	}
+	return message
 }
 
 // nextQuotaCooldown returns the next cooldown duration and updated backoff level for repeated quota errors.

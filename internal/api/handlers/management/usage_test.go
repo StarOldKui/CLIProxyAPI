@@ -1,13 +1,19 @@
 package management
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 )
 
 func TestGetUsageQueuePopsRequestedRecords(t *testing.T) {
@@ -68,6 +74,57 @@ func TestGetUsageQueueInvalidCountDoesNotPop(t *testing.T) {
 	})
 }
 
+func TestImportUsageStatisticsReturnsErrorWhenPersistenceFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	stats := usage.NewRequestStatistics()
+	path := filepath.Join(t.TempDir(), "usage", "usage.json")
+	store := failingUsageSnapshotStore{}
+	if err := usage.StartSnapshotPersistence(context.Background(), stats, path, store); err != nil {
+		t.Fatalf("start persistence: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = usage.StopSnapshotPersistence(context.Background())
+	})
+
+	payload := usageImportPayload{
+		Version: 1,
+		Usage: usage.StatisticsSnapshot{
+			APIs: map[string]usage.APISnapshot{
+				"test-key": {
+					Models: map[string]usage.ModelSnapshot{
+						"gpt-5.4": {
+							Details: []usage.RequestDetail{{
+								Timestamp: time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC),
+								Tokens: usage.TokenStats{
+									InputTokens:  1,
+									OutputTokens: 1,
+									TotalTokens:  2,
+								},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+	body, errMarshal := json.Marshal(payload)
+	if errMarshal != nil {
+		t.Fatalf("marshal payload: %v", errMarshal)
+	}
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	ginCtx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/usage/import", bytes.NewReader(body))
+
+	h := &Handler{usageStats: stats}
+	h.ImportUsageStatistics(ginCtx)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+}
+
 func withManagementUsageQueue(t *testing.T, fn func()) {
 	t.Helper()
 
@@ -95,4 +152,14 @@ func requireRecordID(t *testing.T, raw json.RawMessage, want int) {
 	if payload.ID != want {
 		t.Fatalf("record id = %d, want %d", payload.ID, want)
 	}
+}
+
+type failingUsageSnapshotStore struct{}
+
+func (failingUsageSnapshotStore) LoadUsageSnapshot(context.Context) ([]byte, error) {
+	return nil, errors.New("not available")
+}
+
+func (failingUsageSnapshotStore) SaveUsageSnapshot(context.Context, []byte) error {
+	return errors.New("write failed")
 }

@@ -15,7 +15,7 @@
 - Server entrypoint: `cmd/server/main.go`.
 - Embeddable SDK entrypoint: `sdk/cliproxy`.
 - External model catalog source: embedded `internal/registry/models/models.json`, with optional remote refresh from `router-for-me/models` and `models.router-for.me`.
-- Management panel asset source: `remote-management.panel-github-repository`, defaulting to `https://github.com/router-for-me/Cli-Proxy-API-Management-Center`.
+- Management panel source lives in `web/management`; the built single-file panel is embedded from `internal/managementasset/static/management.html`.
 
 ## What This Project Owns
 
@@ -24,18 +24,19 @@
 - Config loading, validation, comment-preserving config writes, hot reload, auth file watching, and auth synthesis.
 - HTTP/TLS serving, Redis RESP usage queue access, optional pprof serving, request logging, log retention, streaming keep-alives, streaming bootstrap retries, and filtered upstream header passthrough.
 - Token/config persistence through local files, Postgres, git, or S3-compatible object storage with local mirrors.
+- Built-in management panel source, single-file panel build, and embedded `/management.html` serving.
+- Codex quota snapshots for the management panel, including server-side refresh, per-auth plan grouping data, and subscription expiry derived from Codex ID-token claims.
 - Runtime auth manager integration, credential selection, retry/cooldown behavior, session affinity, model registration, and provider executor binding.
 - Provider executors for Gemini, Vertex, Gemini CLI, AI Studio relay, Antigravity, Claude, Codex HTTP/WebSocket, Kimi, and OpenAI-compatible providers.
 - Protocol translation registration and request/response conversion between OpenAI, Gemini, Claude, Codex, and related formats.
 - Thinking normalization through `internal/thinking`: suffix parsing, canonical `ThinkingConfig`, validation/conversion, and provider-specific apply logic.
 - Codex Responses request shaping, including automatic `image_generation` tool injection where supported by global config, the base model, and selected auth.
 - Antigravity Google One AI credits fallback orchestration for Claude models when normal auth selection or execution reports quota exhaustion or unavailability.
-- Usage record publication, request logging, Redis-compatible short-lived usage queue access, per-auth API-key request summaries, Antigravity signature cache, Codex prompt cache, and management debug/read APIs.
+- Usage record publication, persistent management usage statistics, request logging, Redis-compatible short-lived usage queue access, per-auth API-key request summaries, Antigravity signature cache, Codex prompt cache, and management debug/read APIs.
 
 ## What This Project Does Not Own
 
 - Upstream provider APIs, provider account entitlements, billing, quota policy, and model availability outside the local registry snapshot.
-- The management panel source repository beyond downloading and serving its built `management.html` asset.
 - Secrets outside configured token stores and local mirrors.
 - Vendor OAuth consent screens, callback authorization behavior, and provider token refresh semantics.
 
@@ -58,14 +59,16 @@
 
 - Client request enters Gin routes in `internal/api/server.go`.
 - The server starts one TCP listener. `internal/api/protocol_multiplexer.go` routes HTTP and TLS-negotiated HTTP connections into the Gin HTTP server, and routes Redis RESP connections into `internal/api/redis_queue_protocol.go` when management routes are enabled.
-- `/healthz` serves GET/HEAD health checks. `/` serves a small JSON endpoint summary. `/management.html` serves the downloaded management panel asset when the control panel is enabled.
+- `/healthz` serves GET/HEAD health checks. `/` serves a small JSON endpoint summary. `/management.html` serves the embedded management panel when the control panel is enabled; `MANAGEMENT_STATIC_PATH` can override it with an existing local file, and a missing override falls back to the embedded panel.
 - `/v1` routes serve OpenAI-compatible chat/completions, completions, image generations/edits, Claude messages/count_tokens, OpenAI Responses HTTP, OpenAI Responses WebSocket, Responses compact, and model listing.
 - `/backend-api/codex` mirrors the Codex Responses routes for Codex CLI `chatgpt_base_url` compatibility: GET/POST `/responses` and POST `/responses/compact`.
 - `/v1beta` routes serve Gemini-compatible model listing and model actions.
 - `/v1internal:method` serves Gemini CLI internal requests and is gated by `enable-gemini-cli-endpoint`, loopback `RemoteAddr`, and `Host=127.0.0.1`.
 - `/v0/management` routes are registered when `remote-management.secret-key`, `MANAGEMENT_PASSWORD`, or a local TUI password exists, then gated by management middleware rather than normal API key auth.
 - `/v0/management/api-key-usage` returns in-memory API-key auth success/failure totals and 20 recent 10-minute request buckets grouped by provider and `base_url|api_key`.
+- `/v0/management/usage`, `/v0/management/usage/export`, and `/v0/management/usage/import` expose the persistent aggregated usage snapshot for the built-in management panel.
 - `/v0/management/usage-queue?count=N` pops JSON usage records from the same in-memory queue exposed through the Redis RESP interface.
+- `/v0/management/codex-quota/refresh` refreshes Codex quota snapshots for selected or all Codex OAuth auth files through CPA-managed access-token refresh and the ChatGPT `wham/usage` endpoint.
 - `/v1/ws` is the WebSocket relay path attached by `Server.AttachWebsocketRoute`; it creates runtime-only `aistudio-*` providers through `internal/wsrelay`.
 - Amp routes live in `internal/api/modules/amp` and include `/api/provider/:provider/...`, `/api/provider/google/v1beta1/*path`, `/api/{internal,user,auth,meta,ads,telemetry,threads,otel,tab}` proxy routes, and root web routes such as `/threads`, `/docs`, `/settings`, `/auth`, and RSS endpoints.
 - Redis RESP usage queue access accepts `AUTH` with the management key and supports destructive `LPOP`/`RPOP` from the in-memory usage queue. Unauthenticated Redis commands return `NOAUTH`; management-disabled servers reject Redis protocol handling.
@@ -81,20 +84,26 @@
 
 - Default file storage uses `sdk/auth.FileTokenStore` for `auth-dir/*.json`; config remains the selected YAML file.
 - Postgres storage is enabled by `PGSTORE_DSN`; it mirrors config/auth under `<PGSTORE_LOCAL_PATH|WRITABLE_PATH|cwd>/pgstore/{config,auths}`.
-- Object storage is enabled by `OBJECTSTORE_ENDPOINT`; it uses S3-compatible keys under `config/config.yaml` and `auths/...`, mirrored under `<OBJECTSTORE_LOCAL_PATH|WRITABLE_PATH|cwd>/objectstore/{config,auths}`.
+- Object storage is enabled by `OBJECTSTORE_ENDPOINT`; it uses S3-compatible keys under `config/config.yaml`, `auths/...`, and `usage/usage.json`, mirrored under `<OBJECTSTORE_LOCAL_PATH|WRITABLE_PATH|cwd>/objectstore/{config,auths,usage}`.
 - Git storage is enabled by `GITSTORE_GIT_URL`; it uses repo-local `config/config.yaml` and `auths/`, with changes committed and pushed by the store.
 - Remote store startup bootstraps from `config.example.yaml` when needed and overrides `cfg.AuthDir` to the local mirror auth directory.
 - Watcher monitors the selected config path and auth directory. Config reload uses debounce and hash checks; auth reload handles same-directory `.json` files.
 - Watcher auth updates flow through `WithSkipPersist()` to avoid writing the same file event back into storage.
 - Store implementations that expose `PersistConfig()` or `PersistAuthFiles()` are used by watcher/management changes to push local mirror updates to the remote backend.
-- Redis usage queue stores JSON records in process memory under `internal/redisqueue`; `redis-usage-queue-retention-seconds` controls retention with default `60` and max `3600`. Disabling management clears the queue, and `usage-statistics-enabled` gates whether usage records are enqueued.
+- `sdk/cliproxy.Service.Run` wires usage collection for CLI and SDK entrypoints. `internal/usage` aggregates records into an in-process snapshot, loads and flushes `usage/usage.json`, and writes the same snapshot to S3-compatible object storage at `usage/usage.json` when `OBJECTSTORE_ENDPOINT` is selected.
+- Local Docker Compose maps `./usage` to `/CLIProxyAPI/usage`, matching the config/auth/log volume pattern so file-mode usage snapshots survive container recreation.
+- Object-store usage snapshot restore compares `saved_at` with file/object modified times and keeps the newer local mirror when S3 still has an older snapshot; transient S3 read failures fall back to the local mirror when it is readable.
+- Codex quota refresh stores the latest per-auth snapshot under auth metadata key `codex_quota`; this follows the existing auth-file/store persistence path instead of introducing a separate quota database.
+- Redis usage queue stores JSON records in process memory under `internal/redisqueue`; `redis-usage-queue-retention-seconds` controls retention with default `60` and max `3600`. Disabling management clears the queue, and `usage-statistics-enabled` gates both persistent usage aggregation and Redis queue enqueuing.
 - `sdk/cliproxy/auth.Auth` keeps per-auth `Success`, `Failed`, and recent-request bucket counters in memory. These counters are preserved across runtime auth updates but are not serialized to auth JSON.
 
 ## Runtime Assets And Diagnostics
 
 - TLS is controlled by `tls.enable`, `tls.cert`, and `tls.key`; the main server creates a shared TCP listener, wraps it with `tls.NewListener` when TLS is enabled, and serves HTTP through the mux listener.
 - pprof is a separate optional HTTP server controlled by `pprof.enable` and `pprof.addr`, defaulting to `127.0.0.1:8316`, and is re-applied on hot reload.
-- Management panel asset path resolution prefers `MANAGEMENT_STATIC_PATH`, then `<WRITABLE_PATH>/static`, then `<config-dir>/static`; auto-update checks run every 3 hours unless the control panel or auto-update is disabled.
+- Management panel serving prefers the embedded single-file asset. `MANAGEMENT_STATIC_PATH` is only a local debug override when its resolved `management.html` exists; the external auto-updater runs only when the binary has no embedded panel.
+- Management Codex quota refresh starts only while management routes are enabled, stops with server shutdown or management disablement, runs every 10 minutes with concurrency 5, and exposes cached snapshots through `/auth-files`; the quota page hydrates from newer snapshots and polls the file list to pick up background updates.
+- The auth-files Codex filtered view hydrates newer `codex_quota` snapshots into the shared quota store, renders all matching files, and groups them by Codex plan before A-Z file-name ordering.
 - Log output uses stdout by default or rotating `main.log` when `logging-to-file` is enabled. Log directory resolution prefers `<WRITABLE_PATH>/logs`, then writable `./logs`, then `<auth-dir>/logs`.
 - `request-log` controls detailed request logging except in `commercial-mode`, which skips high-overhead request logging middleware.
 - Gin request logging appends `[credits]` when executor context marks an Antigravity request as using Google One AI credits.
@@ -138,7 +147,7 @@
 - Git store: `GITSTORE_GIT_URL`, `GITSTORE_GIT_USERNAME`, `GITSTORE_GIT_TOKEN`, `GITSTORE_GIT_BRANCH`, `GITSTORE_LOCAL_PATH`.
 - Object store: `OBJECTSTORE_ENDPOINT`, `OBJECTSTORE_BUCKET`, `OBJECTSTORE_ACCESS_KEY`, `OBJECTSTORE_SECRET_KEY`, `OBJECTSTORE_LOCAL_PATH`.
 - Runtime placement and mode: `WRITABLE_PATH` or `writable_path`, `DEPLOY`.
-- Management runtime secret and static asset override: `MANAGEMENT_PASSWORD`, `MANAGEMENT_STATIC_PATH`.
+- Management runtime secret and static asset override: `MANAGEMENT_PASSWORD`, `MANAGEMENT_STATIC_PATH`. `/management.html` serves the embedded panel unless the override resolves to an existing `management.html`.
 - Amp upstream secret fallback: `AMP_API_KEY`, after `ampcode.upstream-api-key` and before `~/.local/share/amp/secrets.json`.
 - Lowercase variants for store env keys are accepted by `cmd/server/main.go` for compatibility.
 
@@ -152,6 +161,8 @@
 - Keep filtered upstream header passthrough opt-in; never forward hop-by-hop, cookie, content-length/content-encoding, or known AI gateway fingerprint headers.
 - Keep management auth separate from normal API key auth.
 - Keep Redis RESP and HTTP usage queue access gated by management availability and management-key authentication.
+- Keep persistent `/v0/management/usage` separate from destructive `/v0/management/usage-queue`.
+- Keep usage manager shutdown draining queued records before the final usage snapshot flush.
 - Treat usage queue reads as destructive pops; external collectors must drain within `redis-usage-queue-retention-seconds`.
 - Keep `/v1/responses` WebSocket behavior distinct from `/v1/ws` relay behavior.
 - Keep `/backend-api/codex` as aliases over the same Responses handlers, not as a separate Codex execution path.
@@ -171,13 +182,13 @@
 - Startup and modes: `cmd/server/main.go`, `internal/cmd/run.go`.
 - Config schema and defaults: `internal/config/config.go`, `internal/config/sdk_config.go`, `config.example.yaml`.
 - Server and routes: `internal/api/server.go`, `internal/api/protocol_multiplexer.go`, `internal/api/redis_queue_protocol.go`, `sdk/api/handlers/handlers.go`, `sdk/api/handlers/openai/openai_handlers.go`, `sdk/api/handlers/openai/openai_responses_handlers.go`, `sdk/api/handlers/openai/openai_responses_websocket.go`, `sdk/api/handlers/openai/openai_images_handlers.go`, `sdk/api/handlers/gemini/gemini_handlers.go`, `sdk/api/handlers/claude/code_handlers.go`.
-- Management and OAuth: `internal/api/handlers/management/handler.go`, `internal/api/handlers/management/auth_files.go`, `internal/api/handlers/management/oauth_sessions.go`, `internal/api/handlers/management/oauth_callback.go`, `internal/api/handlers/management/usage.go`, `internal/api/handlers/management/api_key_usage.go`.
-- Runtime assets and diagnostics: `internal/managementasset/updater.go`, `internal/logging/global_logger.go`, `internal/logging/gin_logger.go`, `internal/logging/requestmeta.go`, `sdk/cliproxy/pprof_server.go`.
+- Management and OAuth: `internal/api/handlers/management/handler.go`, `internal/api/handlers/management/auth_files.go`, `internal/api/handlers/management/codex_quota.go`, `internal/api/handlers/management/oauth_sessions.go`, `internal/api/handlers/management/oauth_callback.go`, `internal/api/handlers/management/usage.go`, `internal/api/handlers/management/api_key_usage.go`.
+- Runtime assets and diagnostics: `internal/managementasset/embedded.go`, `internal/managementasset/updater.go`, `web/management`, `internal/logging/global_logger.go`, `internal/logging/gin_logger.go`, `internal/logging/requestmeta.go`, `sdk/cliproxy/pprof_server.go`.
 - Amp: `internal/api/modules/amp/routes.go`, `internal/api/modules/amp/fallback_handlers.go`, `internal/api/modules/amp/proxy.go`.
 - SDK service: `sdk/cliproxy/builder.go`, `sdk/cliproxy/service.go`, `sdk/cliproxy/auth/conductor.go`, `sdk/cliproxy/auth/antigravity_credits.go`.
 - Watcher and synthesis: `internal/watcher/watcher.go`, `internal/watcher/config_reload.go`, `internal/watcher/dispatcher.go`, `internal/watcher/synthesizer/config.go`, `internal/watcher/synthesizer/file.go`.
 - Stores: `sdk/auth/filestore.go`, `internal/store/postgresstore.go`, `internal/store/objectstore.go`, `internal/store/gitstore.go`.
 - Runtime execution: `internal/runtime/executor/*.go`, `internal/runtime/executor/helps/*.go`.
 - Translation and thinking: `sdk/translator/registry.go`, `sdk/translator/pipeline.go`, `internal/translator/init.go`, `internal/thinking/apply.go`, `internal/thinking/validate.go`, `internal/thinking/convert.go`.
-- Model registry and usage: `internal/registry/model_definitions.go`, `internal/registry/model_registry.go`, `internal/registry/model_updater.go`, `sdk/cliproxy/usage/manager.go`, `internal/redisqueue`.
+- Model registry and usage: `internal/registry/model_definitions.go`, `internal/registry/model_registry.go`, `internal/registry/model_updater.go`, `sdk/cliproxy/usage/manager.go`, `internal/usage`, `internal/redisqueue`.
 - WebSocket relay: `internal/wsrelay/manager.go`, `internal/wsrelay/http.go`, `internal/wsrelay/session.go`.

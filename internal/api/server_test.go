@@ -107,12 +107,12 @@ func TestManagementUsageRequiresManagementAuthAndPopsArray(t *testing.T) {
 		t.Fatalf("missing key status = %d, want %d body=%s", missingKeyRR.Code, http.StatusUnauthorized, missingKeyRR.Body.String())
 	}
 
-	legacyReq := httptest.NewRequest(http.MethodGet, "/v0/management/usage?count=2", nil)
-	legacyReq.Header.Set("Authorization", "Bearer test-management-key")
-	legacyRR := httptest.NewRecorder()
-	server.engine.ServeHTTP(legacyRR, legacyReq)
-	if legacyRR.Code != http.StatusNotFound {
-		t.Fatalf("legacy usage status = %d, want %d body=%s", legacyRR.Code, http.StatusNotFound, legacyRR.Body.String())
+	usageReq := httptest.NewRequest(http.MethodGet, "/v0/management/usage", nil)
+	usageReq.Header.Set("Authorization", "Bearer test-management-key")
+	usageRR := httptest.NewRecorder()
+	server.engine.ServeHTTP(usageRR, usageReq)
+	if usageRR.Code != http.StatusOK {
+		t.Fatalf("usage status = %d, want %d body=%s", usageRR.Code, http.StatusOK, usageRR.Body.String())
 	}
 
 	authReq := httptest.NewRequest(http.MethodGet, "/v0/management/usage-queue?count=2", nil)
@@ -144,6 +144,23 @@ func TestManagementUsageRequiresManagementAuthAndPopsArray(t *testing.T) {
 
 	if remaining := redisqueue.PopOldest(1); len(remaining) != 0 {
 		t.Fatalf("remaining queue = %q, want empty", remaining)
+	}
+}
+
+func TestManagementHTMLFallsBackToEmbeddedWhenOverrideMissing(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing", "management.html")
+	t.Setenv("MANAGEMENT_STATIC_PATH", missingPath)
+
+	server := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/management.html", nil)
+	rr := httptest.NewRecorder()
+	server.engine.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(rr.Body.String()), "<!doctype html") {
+		t.Fatalf("embedded management html missing doctype")
 	}
 }
 

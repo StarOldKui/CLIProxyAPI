@@ -53,6 +53,11 @@ func SetRetentionSeconds(value int) {
 	retentionSeconds.Store(normalized)
 }
 
+// RetentionSeconds reports the current queue retention window.
+func RetentionSeconds() int {
+	return int(retentionSeconds.Load())
+}
+
 func Enqueue(payload []byte) {
 	if !Enabled() {
 		return

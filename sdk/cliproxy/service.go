@@ -13,9 +13,10 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
-	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
+	internalusage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -89,6 +90,10 @@ type Service struct {
 
 	// wsGateway manages websocket Gemini providers.
 	wsGateway *wsrelay.Manager
+}
+
+type usageSnapshotPathProvider interface {
+	UsageSnapshotPath() string
 }
 
 // RegisterUsagePlugin registers a usage plugin on the global usage manager.
@@ -444,6 +449,30 @@ func (s *Service) registerResolvedModelsForAuth(a *coreauth.Auth, providerKey st
 	GlobalModelRegistry().RegisterClient(a.ID, providerKey, models)
 }
 
+func (s *Service) startUsageRuntime(ctx context.Context) {
+	if s == nil || s.cfg == nil {
+		return
+	}
+	redisqueue.SetUsageStatisticsEnabled(s.cfg.UsageStatisticsEnabled)
+	redisqueue.SetRetentionSeconds(s.cfg.RedisUsageQueueRetentionSeconds)
+	internalusage.SetStatisticsEnabled(s.cfg.UsageStatisticsEnabled)
+
+	snapshotPath := internalusage.DefaultSnapshotPath(s.configPath)
+	var snapshotStore internalusage.SnapshotStore
+	tokenStore := sdkAuth.GetTokenStore()
+	if store, ok := tokenStore.(internalusage.SnapshotStore); ok {
+		snapshotStore = store
+	}
+	if pathProvider, ok := tokenStore.(usageSnapshotPathProvider); ok {
+		if path := strings.TrimSpace(pathProvider.UsageSnapshotPath()); path != "" {
+			snapshotPath = path
+		}
+	}
+	if err := internalusage.StartSnapshotPersistence(ctx, internalusage.GetRequestStatistics(), snapshotPath, snapshotStore); err != nil {
+		log.Warnf("failed to start usage snapshot persistence: %v", err)
+	}
+}
+
 // rebindExecutors refreshes provider executors so they observe the latest configuration.
 func (s *Service) rebindExecutors() {
 	if s == nil || s.coreManager == nil {
@@ -479,6 +508,7 @@ func (s *Service) Run(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
+	s.startUsageRuntime(ctx)
 	usage.StartDefault(ctx)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -789,6 +819,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 
 		usage.StopDefault()
+		if errFlushUsage := internalusage.StopSnapshotPersistence(ctx); errFlushUsage != nil {
+			log.Errorf("failed to flush usage snapshot: %v", errFlushUsage)
+			if shutdownErr == nil {
+				shutdownErr = errFlushUsage
+			}
+		}
 	})
 	return shutdownErr
 }

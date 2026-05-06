@@ -9,6 +9,7 @@ config.yaml
 # Generated content
 bin/*
 logs/*
+usage/*
 conv/*
 temp/*
 refs/*
@@ -20,6 +21,8 @@ objectstore/*
 
 # Static assets
 static/*
+web/management/node_modules/
+web/management/dist/
 
 # Authentication data
 auths/*
