@@ -199,6 +199,7 @@ export function AuthFilesPage() {
     selectedFiles,
     selectionCount,
     loading,
+    refreshing,
     error,
     uploading,
     deleting,
@@ -266,6 +267,7 @@ export function AuthFilesPage() {
   });
 
   const disableControls = connectionStatus !== 'connected';
+  const filesBusy = loading || refreshing;
   const normalizedFilter = normalizeProviderKey(String(filter));
   const quotaFilterType: QuotaProviderType | null = QUOTA_PROVIDER_TYPES.has(
     normalizedFilter as QuotaProviderType
@@ -843,7 +845,13 @@ export function AuthFilesPage() {
         title={titleNode}
         extra={
           <div className={styles.headerActions}>
-            <Button variant="secondary" size="sm" onClick={handleHeaderRefresh} disabled={loading}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleHeaderRefresh}
+              disabled={filesBusy}
+              loading={refreshing}
+            >
               {t('common.refresh')}
             </Button>
             <Button
@@ -869,7 +877,7 @@ export function AuthFilesPage() {
                   onResetDisabledOnly: () => setDisabledOnly(false),
                 })
               }
-              disabled={disableControls || loading || deletingAll}
+              disabled={disableControls || filesBusy || deletingAll}
               loading={deletingAll}
             >
               {deleteAllButtonLabel}

@@ -28,6 +28,7 @@ export type UseAuthFilesDataResult = {
   selectedFiles: Set<string>;
   selectionCount: number;
   loading: boolean;
+  refreshing: boolean;
   error: string;
   uploading: boolean;
   deleting: string | null;
@@ -57,6 +58,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
 
   const [files, setFiles] = useState<AuthFileItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -67,6 +69,8 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const batchStatusPendingRef = useRef(false);
+  const loadedRef = useRef(false);
+  const requestIdRef = useRef(0);
   const selectionCount = selectedFiles.size;
   const toggleSelect = useCallback((name: string) => {
     setSelectedFiles((prev) => {
@@ -160,16 +164,26 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
   }, [files, selectedFiles.size]);
 
   const loadFiles = useCallback(async () => {
-    setLoading(true);
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    const isInitialLoad = !loadedRef.current;
+    setLoading(isInitialLoad);
+    setRefreshing(!isInitialLoad);
     setError('');
     try {
       const data = await authFilesApi.list();
+      if (requestId !== requestIdRef.current) return;
       setFiles(data?.files || []);
+      loadedRef.current = true;
     } catch (err: unknown) {
+      if (requestId !== requestIdRef.current) return;
       const errorMessage = err instanceof Error ? err.message : t('notification.refresh_failed');
       setError(errorMessage);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [t]);
 
@@ -641,6 +655,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
     selectedFiles,
     selectionCount,
     loading,
+    refreshing,
     error,
     uploading,
     deleting,

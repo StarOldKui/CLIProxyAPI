@@ -2,12 +2,11 @@
  * Generic quota section component.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
 import type { AuthFileItem, ResolvedTheme } from '@/types';
 import { getStatusFromError } from '@/utils/quota';
@@ -95,13 +94,15 @@ interface QuotaSectionProps<TState extends QuotaStatusState, TData> {
   files: AuthFileItem[];
   loading: boolean;
   disabled: boolean;
+  onRefreshFiles: () => Promise<AuthFileItem[]>;
 }
 
 export function QuotaSection<TState extends QuotaStatusState, TData>({
   config,
   files,
   loading,
-  disabled
+  disabled,
+  onRefreshFiles
 }: QuotaSectionProps<TState, TData>) {
   const { t } = useTranslation();
   const resolvedTheme: ResolvedTheme = useThemeStore((state) => state.resolvedTheme);
@@ -112,6 +113,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
 
   const [columns, gridRef] = useGridColumns(380);
   const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [refreshingFiles, setRefreshingFiles] = useState(false);
   const { quota, loadQuota } = useQuotaLoader(config);
 
   const quotaFileNames = useMemo(
@@ -154,28 +156,28 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
     }
   }, [viewMode, columns, filteredFiles.length, setPageSize]);
 
-  const pendingQuotaRefreshRef = useRef(false);
-  const prevFilesLoadingRef = useRef(loading);
-
-  const handleRefresh = useCallback(() => {
-    pendingQuotaRefreshRef.current = true;
-    void triggerHeaderRefresh();
-  }, []);
-
-  useEffect(() => {
-    const wasLoading = prevFilesLoadingRef.current;
-    prevFilesLoadingRef.current = loading;
-
-    if (!pendingQuotaRefreshRef.current) return;
-    if (loading) return;
-    if (!wasLoading) return;
-
-    pendingQuotaRefreshRef.current = false;
-    const scope = 'all';
-    const targets = filteredFiles;
-    if (targets.length === 0) return;
-    loadQuota(targets, scope, setLoading);
-  }, [loading, filteredFiles, loadQuota, setLoading]);
+  const handleRefresh = useCallback(async () => {
+    if (sectionLoading || loading || refreshingFiles) return;
+    setRefreshingFiles(true);
+    try {
+      const latestFiles = await onRefreshFiles();
+      const matched = latestFiles.filter((file) => config.filterFn(file));
+      const targets = config.sortFiles ? config.sortFiles(matched, quota) : matched;
+      if (targets.length === 0) return;
+      await loadQuota(targets, 'all', setLoading);
+    } finally {
+      setRefreshingFiles(false);
+    }
+  }, [
+    config,
+    loadQuota,
+    loading,
+    onRefreshFiles,
+    quota,
+    refreshingFiles,
+    sectionLoading,
+    setLoading
+  ]);
 
   useEffect(() => {
     if (loading) return;
@@ -286,7 +288,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
     </div>
   );
 
-  const isRefreshing = sectionLoading || loading;
+  const isRefreshing = sectionLoading || loading || refreshingFiles;
   const groups = useMemo(
     () =>
       config.groupFiles
@@ -338,7 +340,9 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
         </div>
       }
     >
-      {filteredFiles.length === 0 ? (
+      {loading && filteredFiles.length === 0 ? (
+        <div className={styles.quotaMessage}>{t('common.loading')}</div>
+      ) : filteredFiles.length === 0 ? (
         <EmptyState
           title={t(`${config.i18nPrefix}.empty_title`)}
           description={t(`${config.i18nPrefix}.empty_desc`)}
