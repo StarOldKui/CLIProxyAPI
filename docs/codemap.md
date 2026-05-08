@@ -102,8 +102,8 @@
 - TLS is controlled by `tls.enable`, `tls.cert`, and `tls.key`; the main server creates a shared TCP listener, wraps it with `tls.NewListener` when TLS is enabled, and serves HTTP through the mux listener.
 - pprof is a separate optional HTTP server controlled by `pprof.enable` and `pprof.addr`, defaulting to `127.0.0.1:8316`, and is re-applied on hot reload.
 - Management panel serving prefers the embedded single-file asset. `MANAGEMENT_STATIC_PATH` is only a local debug override when its resolved `management.html` exists; the external auto-updater runs only when the binary has no embedded panel.
-- Management Codex quota refresh starts only while management routes are enabled, stops with server shutdown or management disablement, runs every 10 minutes with concurrency 5, and exposes cached snapshots through `/auth-files`; the quota page hydrates from newer snapshots and polls the file list to pick up background updates.
-- The auth-files Codex filtered view hydrates newer `codex_quota` snapshots into the shared quota store, renders all matching files, and groups them by Codex plan before A-Z file-name ordering.
+- Management Codex quota refresh starts only while management routes are enabled, stops with server shutdown or management disablement, runs every 10 minutes with concurrency 5, and exposes cached snapshots through `/auth-files`; the credential center hydrates newer snapshots from the file list.
+- The management credential center is implemented by the `/auth-files` route; `/quota` redirects there. It renders all credentials grouped by provider in the all view, groups Codex credentials by plan inside Codex views, and can sort within groups by name, priority, or remaining quota.
 - Log output uses stdout by default or rotating `main.log` when `logging-to-file` is enabled. Log directory resolution prefers `<WRITABLE_PATH>/logs`, then writable `./logs`, then `<auth-dir>/logs`.
 - `request-log` controls detailed request logging except in `commercial-mode`, which skips high-overhead request logging middleware.
 - Gin request logging appends `[credits]` when executor context marks an Antigravity request as using Google One AI credits.

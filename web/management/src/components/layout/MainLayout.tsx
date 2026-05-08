@@ -19,7 +19,6 @@ import {
   IconSidebarLogs,
   IconSidebarOauth,
   IconSidebarProviders,
-  IconSidebarQuota,
   IconSidebarSystem,
   IconSidebarUsage,
 } from '@/components/ui/icons';
@@ -41,7 +40,6 @@ const sidebarIcons: Record<string, ReactNode> = {
   aiProviders: <IconSidebarProviders size={18} />,
   authFiles: <IconSidebarAuthFiles size={18} />,
   oauth: <IconSidebarOauth size={18} />,
-  quota: <IconSidebarQuota size={18} />,
   usage: <IconSidebarUsage size={18} />,
   config: <IconSidebarConfig size={18} />,
   logs: <IconSidebarLogs size={18} />,
@@ -392,7 +390,6 @@ export function MainLayout() {
     { path: '/ai-providers', label: t('nav.ai_providers'), icon: sidebarIcons.aiProviders },
     { path: '/oauth', label: t('nav.oauth', { defaultValue: 'OAuth' }), icon: sidebarIcons.oauth },
     { path: '/auth-files', label: t('nav.auth_files'), icon: sidebarIcons.authFiles },
-    { path: '/quota', label: t('nav.quota_management'), icon: sidebarIcons.quota },
     { path: '/usage', label: t('nav.usage_stats'), icon: sidebarIcons.usage },
     ...(config?.loggingToFile
       ? [{ path: '/logs', label: t('nav.logs'), icon: sidebarIcons.logs }]
@@ -487,16 +484,16 @@ export function MainLayout() {
           type="button"
           className="sidebar-toggle-floating"
           onClick={() => setSidebarCollapsed((prev) => !prev)}
-          title={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
-          aria-label={
-            sidebarCollapsed
-              ? t('sidebar.expand', { defaultValue: '展开' })
-              : t('sidebar.collapse', { defaultValue: '收起' })
-          }
+            title={
+              sidebarCollapsed
+                ? t('sidebar.expand', { defaultValue: 'Expand' })
+                : t('sidebar.collapse', { defaultValue: 'Collapse' })
+            }
+            aria-label={
+              sidebarCollapsed
+                ? t('sidebar.expand', { defaultValue: 'Expand' })
+                : t('sidebar.collapse', { defaultValue: 'Collapse' })
+            }
         >
           {sidebarCollapsed ? headerIcons.chevronRight : headerIcons.chevronLeft}
         </button>

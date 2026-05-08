@@ -43,6 +43,7 @@ import {
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
 import { AuthFileCard } from '@/features/authFiles/components/AuthFileCard';
+import { AuthFileDetailsModal } from '@/features/authFiles/components/AuthFileDetailsModal';
 import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileModelsModal';
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
 import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
@@ -62,7 +63,7 @@ import {
 } from '@/features/authFiles/uiState';
 import { CODEX_CONFIG } from '@/components/quota';
 import { useAuthStore, useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
-import { resolveAuthProvider } from '@/utils/quota';
+import { normalizePlanType, resolveAuthProvider, resolveCodexPlanType } from '@/utils/quota';
 import styles from './AuthFilesPage.module.scss';
 
 const easePower3Out = (progress: number) => 1 - (1 - progress) ** 4;
@@ -71,12 +72,19 @@ const BATCH_BAR_BASE_TRANSFORM = 'translateX(-50%)';
 const BATCH_BAR_HIDDEN_TRANSFORM = 'translateX(-50%) translateY(56px)';
 const DEFAULT_REGULAR_PAGE_SIZE = 9;
 const DEFAULT_COMPACT_PAGE_SIZE = 12;
+const CODEX_QUOTA_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 type AuthQuotaState = { status?: string; error?: string; errorStatus?: number } | undefined;
 
 type AuthQuotaMaps = Record<QuotaProviderType, Record<string, AuthQuotaState>>;
 
 type TimestampedQuotaState = { status?: string; updatedAt?: string | null } | undefined;
+
+type ProviderFileGroup = {
+  key: string;
+  label: string;
+  files: AuthFileItem[];
+};
 
 const escapeWildcardSearchSegment = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -100,22 +108,6 @@ const hasAuthFileQuotaSnapshotProblem = (file: AuthFileItem): boolean => {
     !Array.isArray(snapshot) &&
     (snapshot as { status?: unknown; error?: unknown }).status === 'error' &&
     !isUsageLimitReachedMessage(String((snapshot as { error?: unknown }).error ?? ''))
-  );
-};
-
-const isAuthFileQuotaUsageLimited = (file: AuthFileItem, quotaMaps: AuthQuotaMaps): boolean => {
-  const quota = getQuotaStateForAuthFile(file, quotaMaps);
-  if (quota) {
-    return quota.status === 'error' && isUsageLimitReachedMessage(quota.error ?? '');
-  }
-
-  const snapshot = file.codex_quota ?? file.codexQuota;
-  return Boolean(
-    snapshot &&
-    typeof snapshot === 'object' &&
-    !Array.isArray(snapshot) &&
-    (snapshot as { status?: unknown; error?: unknown }).status === 'error' &&
-    isUsageLimitReachedMessage(String((snapshot as { error?: unknown }).error ?? ''))
   );
 };
 
@@ -154,6 +146,76 @@ const resolveEffectiveCodexQuota = (
   return current ?? cached ?? undefined;
 };
 
+const resolveCodexQuotaSortWindowId = (
+  file: AuthFileItem,
+  quota: CodexQuotaState | undefined
+): 'five-hour' | 'weekly' => {
+  const plan = normalizePlanType(quota?.planType) ?? resolveCodexPlanType(file);
+  return plan === 'free' ? 'weekly' : 'five-hour';
+};
+
+const getCodexRemainingQuotaScore = (
+  file: AuthFileItem,
+  quota: CodexQuotaState | undefined
+): number | null => {
+  if (!quota || quota.status !== 'success') return null;
+  const windowId = resolveCodexQuotaSortWindowId(file, quota);
+  const windows = Array.isArray(quota.windows) ? quota.windows : [];
+  const window = windows.find((item) => item.id === windowId);
+  const usedPercent = window?.usedPercent;
+  if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)) return null;
+  const clampedUsed = Math.max(0, Math.min(100, usedPercent));
+  return Math.max(0, Math.min(100, 100 - clampedUsed));
+};
+
+const isCodexQuotaExhausted = (
+  file: AuthFileItem,
+  quota: CodexQuotaState | undefined
+): boolean => getCodexRemainingQuotaScore(file, quota) === 0;
+
+const formatClockTime = (timestamp: number | null): string => {
+  if (timestamp === null) return '';
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+};
+
+const formatCountdown = (remainingMs: number): string => {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
+};
+
+const isAuthFileQuotaUsageLimited = (file: AuthFileItem, quotaMaps: AuthQuotaMaps): boolean => {
+  const quota = getQuotaStateForAuthFile(file, quotaMaps);
+  if (quota) {
+    if (quota.status === 'error' && isUsageLimitReachedMessage(quota.error ?? '')) return true;
+    if (resolveAuthProvider(file) === 'codex') {
+      return isCodexQuotaExhausted(file, quota as CodexQuotaState);
+    }
+    return false;
+  }
+
+  const snapshot = file.codex_quota ?? file.codexQuota;
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false;
+
+  if (
+    (snapshot as { status?: unknown; error?: unknown }).status === 'error' &&
+    isUsageLimitReachedMessage(String((snapshot as { error?: unknown }).error ?? ''))
+  ) {
+    return true;
+  }
+
+  if (resolveAuthProvider(file) === 'codex') {
+    return isCodexQuotaExhausted(file, snapshot as CodexQuotaState);
+  }
+  return false;
+};
+
 export function AuthFilesPage() {
   const { t } = useTranslation();
   const showNotification = useNotificationStore((state) => state.showNotification);
@@ -186,9 +248,11 @@ export function AuthFilesPage() {
   });
   const [pageSizeInput, setPageSizeInput] = useState('9');
   const [viewMode, setViewMode] = useState<'diagram' | 'list'>('list');
-  const [sortMode, setSortMode] = useState<AuthFilesSortMode>('az');
+  const [sortMode, setSortMode] = useState<AuthFilesSortMode>('quota');
+  const [detailsFile, setDetailsFile] = useState<AuthFileItem | null>(null);
   const [batchActionBarVisible, setBatchActionBarVisible] = useState(false);
   const [uiStateHydrated, setUiStateHydrated] = useState(false);
+  const [quotaRefreshNowMs, setQuotaRefreshNowMs] = useState(() => Date.now());
   const floatingBatchActionsRef = useRef<HTMLDivElement>(null);
   const batchActionAnimationRef = useRef<AnimationPlaybackControlsWithThen | null>(null);
   const previousSelectionCountRef = useRef(0);
@@ -285,7 +349,9 @@ export function AuthFilesPage() {
     [antigravityQuota, claudeQuota, codexQuota, geminiCliQuota, kimiQuota]
   );
   const pageSize = compactMode ? pageSizeByMode.compact : pageSizeByMode.regular;
+  const isAllGroupedView = filter === 'all';
   const isCodexGroupedView = quotaFilterType === 'codex';
+  const isGroupedView = isAllGroupedView || isCodexGroupedView;
 
   useEffect(() => {
     if (files.length === 0) return;
@@ -351,7 +417,7 @@ export function AuthFilesPage() {
         compact: compactPageSize,
       });
       if (isAuthFilesSortMode(persisted.sortMode)) {
-        setSortMode(persisted.sortMode === 'default' ? 'az' : persisted.sortMode);
+        setSortMode(persisted.sortMode === 'default' ? 'quota' : persisted.sortMode);
       }
     }
 
@@ -504,6 +570,7 @@ export function AuthFilesPage() {
     () => [
       { value: 'default', label: t('auth_files.sort_default') },
       { value: 'az', label: t('auth_files.sort_az') },
+      { value: 'quota', label: t('auth_files.sort_quota') },
       { value: 'priority', label: t('auth_files.sort_priority') },
     ],
     [t]
@@ -517,6 +584,68 @@ export function AuthFilesPage() {
     });
     return counts;
   }, [filesMatchingStatusFilters]);
+
+  const codexRefreshSummary = useMemo(() => {
+    let lastRefreshAt: number | null = null;
+    let success = 0;
+    let failed = 0;
+
+    files.forEach((file) => {
+      if (resolveAuthProvider(file) !== 'codex') return;
+      const cached = CODEX_CONFIG.getCachedState?.(file, t);
+      const effective = resolveEffectiveCodexQuota(
+        codexQuota[file.name] as CodexQuotaState | undefined,
+        cached
+      );
+      if (!effective) return;
+
+      if (effective.status === 'success') {
+        success += 1;
+      } else if (effective.status === 'error') {
+        failed += 1;
+      }
+
+      const refreshedAt = parseQuotaUpdatedAt(effective.updatedAt);
+      if (refreshedAt !== null && (lastRefreshAt === null || refreshedAt > lastRefreshAt)) {
+        lastRefreshAt = refreshedAt;
+      }
+    });
+
+    return {
+      failed,
+      lastRefreshAt,
+      nextRefreshAt:
+        lastRefreshAt === null ? null : lastRefreshAt + CODEX_QUOTA_REFRESH_INTERVAL_MS,
+      success,
+    };
+  }, [codexQuota, files, t]);
+  const codexQuotaRefreshDue =
+    codexRefreshSummary.nextRefreshAt !== null &&
+    quotaRefreshNowMs >= codexRefreshSummary.nextRefreshAt;
+
+  useInterval(
+    () => {
+      setQuotaRefreshNowMs(Date.now());
+    },
+    isCurrentLayer && codexRefreshSummary.nextRefreshAt !== null ? 1000 : null
+  );
+
+  useEffect(() => {
+    if (!isCurrentLayer || !codexQuotaRefreshDue) return;
+
+    const timer = setTimeout(() => {
+      void loadFiles().catch(() => {});
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [codexQuotaRefreshDue, isCurrentLayer, loadFiles]);
+
+  useInterval(
+    () => {
+      void loadFiles().catch(() => {});
+    },
+    isCurrentLayer && codexQuotaRefreshDue ? 15_000 : null
+  );
 
   const normalizedSearch = search.trim();
   const wildcardSearch = useMemo(() => buildWildcardSearch(normalizedSearch), [normalizedSearch]);
@@ -550,8 +679,34 @@ export function AuthFilesPage() {
         if (providerCompare !== 0) return providerCompare;
         return a.name.localeCompare(b.name);
       });
-    } else if (sortMode === 'az') {
+    } else if (sortMode === 'az' || (sortMode === 'quota' && !isGroupedView)) {
       copy.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortMode === 'quota' && isGroupedView) {
+      const scoreByName = new Map<string, number | null>();
+      const getScore = (file: AuthFileItem) => {
+        if (scoreByName.has(file.name)) return scoreByName.get(file.name) ?? null;
+        const cached = CODEX_CONFIG.getCachedState?.(file, t);
+        const effective = resolveEffectiveCodexQuota(
+          codexQuota[file.name] as CodexQuotaState | undefined,
+          cached
+        );
+        const score = getCodexRemainingQuotaScore(file, effective);
+        scoreByName.set(file.name, score);
+        return score;
+      };
+
+      copy.sort((a, b) => {
+        const scoreA = getScore(a);
+        const scoreB = getScore(b);
+        const knownA = scoreA !== null;
+        const knownB = scoreB !== null;
+        if (knownA !== knownB) return knownA ? -1 : 1;
+        if (scoreA !== null && scoreB !== null) {
+          const scoreDiff = scoreB - scoreA;
+          if (scoreDiff !== 0) return scoreDiff;
+        }
+        return a.name.localeCompare(b.name);
+      });
     } else if (sortMode === 'priority') {
       copy.sort((a, b) => {
         const pa = parsePriorityValue(a.priority ?? a['priority']) ?? 0;
@@ -560,16 +715,17 @@ export function AuthFilesPage() {
       });
     }
     return copy;
-  }, [filtered, sortMode]);
+  }, [codexQuota, filtered, isGroupedView, sortMode, t]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * pageSize;
-  const pageItems = isCodexGroupedView ? sorted : sorted.slice(start, start + pageSize);
+  const pageItems = isGroupedView ? sorted : sorted.slice(start, start + pageSize);
   const codexQuotaForGrouping = useMemo(() => {
-    if (!isCodexGroupedView) return {};
+    if (!isGroupedView) return {};
     const quotaByName: Record<string, CodexQuotaState> = {};
     pageItems.forEach((file) => {
+      if (resolveAuthProvider(file) !== 'codex') return;
       const cached = CODEX_CONFIG.getCachedState?.(file, t);
       const effective = resolveEffectiveCodexQuota(
         codexQuota[file.name] as CodexQuotaState | undefined,
@@ -580,14 +736,28 @@ export function AuthFilesPage() {
       }
     });
     return quotaByName;
-  }, [codexQuota, isCodexGroupedView, pageItems, t]);
-  const codexGroups = useMemo(
-    () =>
-      isCodexGroupedView
-        ? (CODEX_CONFIG.groupFiles?.(pageItems, codexQuotaForGrouping, t) ?? [])
-        : [],
-    [codexQuotaForGrouping, isCodexGroupedView, pageItems, t]
-  );
+  }, [codexQuota, isGroupedView, pageItems, t]);
+  const providerGroups = useMemo<ProviderFileGroup[]>(() => {
+    if (!isAllGroupedView) return [];
+
+    const groups = new Map<string, ProviderFileGroup>();
+    pageItems.forEach((file) => {
+      const providerKey = normalizeProviderKey(resolveAuthProvider(file) || file.type || 'unknown');
+      const existing = groups.get(providerKey);
+      if (existing) {
+        existing.files.push(file);
+        return;
+      }
+
+      groups.set(providerKey, {
+        key: providerKey,
+        label: getTypeLabel(t, providerKey),
+        files: [file],
+      });
+    });
+
+    return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [isAllGroupedView, pageItems, t]);
   const selectablePageItems = useMemo(
     () => pageItems.filter((file) => !isRuntimeOnlyAuthFile(file)),
     [pageItems]
@@ -792,13 +962,6 @@ export function AuthFilesPage() {
     </div>
   );
 
-  const titleNode = (
-    <div className={styles.titleWrapper}>
-      <span>{t('auth_files.title_section')}</span>
-      {files.length > 0 && <span className={styles.countBadge}>{files.length}</span>}
-    </div>
-  );
-
   const deleteAllButtonLabel = (() => {
     if (useFilteredResultDeleteCopy) {
       return t('auth_files.delete_filtered_result_button');
@@ -826,6 +989,7 @@ export function AuthFilesPage() {
       quotaFilterType={quotaFilterType}
       statusBarCache={statusBarCache}
       onShowModels={showModels}
+      onShowDetails={setDetailsFile}
       onDownload={handleDownload}
       onOpenPrefixProxyEditor={openPrefixProxyEditor}
       onDelete={handleDelete}
@@ -833,6 +997,66 @@ export function AuthFilesPage() {
       onToggleSelect={toggleSelect}
     />
   );
+
+  const renderAuthFileGrid = (items: AuthFileItem[], quotaManaged = false) => (
+    <div
+      className={`${styles.fileGrid} ${quotaManaged ? styles.fileGridQuotaManaged : ''} ${compactMode ? styles.fileGridCompact : ''}`}
+    >
+      {items.map(renderAuthFileCard)}
+    </div>
+  );
+
+  const renderCodexFileGroups = (items: AuthFileItem[]) => (
+    <div className={styles.fileGroups}>
+      {(CODEX_CONFIG.groupFiles?.(items, codexQuotaForGrouping, t) ?? []).map((group) => (
+        <section key={group.key} className={styles.fileGroup}>
+          <h3 className={styles.fileGroupTitle}>
+            <span>{group.label}</span>
+            <span className={styles.fileGroupCount}>{group.files.length}</span>
+          </h3>
+          {renderAuthFileGrid(group.files, true)}
+        </section>
+      ))}
+    </div>
+  );
+
+  const renderProviderGroup = (group: ProviderFileGroup) => {
+    const iconSrc = getAuthFileIcon(group.key, resolvedTheme);
+    const color = getTypeColor(group.key, resolvedTheme);
+    const quotaManaged = QUOTA_PROVIDER_TYPES.has(group.key as QuotaProviderType);
+
+    return (
+      <section key={group.key} className={styles.providerGroup}>
+        <header className={styles.providerGroupHeader}>
+          <div className={styles.providerGroupTitle}>
+            <span
+              className={styles.providerGroupIconWrap}
+              style={{
+                backgroundColor: color.bg,
+                color: color.text,
+                ...(color.border ? { border: color.border } : {}),
+              }}
+            >
+              {iconSrc ? (
+                <img src={iconSrc} alt="" className={styles.providerGroupIcon} />
+              ) : (
+                <span className={styles.providerGroupIconFallback}>
+                  {group.label.slice(0, 1).toUpperCase()}
+                </span>
+              )}
+            </span>
+            <span>{group.label}</span>
+            <span className={styles.providerGroupCount}>{group.files.length}</span>
+          </div>
+        </header>
+        <div className={styles.providerGroupBody}>
+          {group.key === 'codex'
+            ? renderCodexFileGroups(group.files)
+            : renderAuthFileGrid(group.files, quotaManaged)}
+        </div>
+      </section>
+    );
+  };
 
   return (
     <div className={styles.container}>
@@ -842,7 +1066,33 @@ export function AuthFilesPage() {
       </div>
 
       <Card
-        title={titleNode}
+        title={
+          <div className={styles.quotaRefreshSummary}>
+            <div className={styles.quotaRefreshTile}>
+              <span>{t('auth_files.quota_refresh_last')}</span>
+              <strong>
+                {codexRefreshSummary.lastRefreshAt === null
+                  ? t('auth_files.refresh_not_available')
+                  : formatClockTime(codexRefreshSummary.lastRefreshAt)}
+              </strong>
+            </div>
+            <div className={styles.quotaRefreshTile}>
+              <span>{t('auth_files.quota_refresh_next')}</span>
+              <strong className={styles.quotaRefreshCountdown}>
+                {codexRefreshSummary.nextRefreshAt === null
+                  ? t('auth_files.refresh_not_available')
+                  : formatCountdown(codexRefreshSummary.nextRefreshAt - quotaRefreshNowMs)}
+              </strong>
+            </div>
+            <div className={styles.quotaRefreshTile}>
+              <span>{t('auth_files.quota_refresh_result')}</span>
+              <strong>
+                {codexRefreshSummary.success} {t('common.success')} · {codexRefreshSummary.failed}{' '}
+                {t('common.failure')}
+              </strong>
+            </div>
+          </div>
+        }
         extra={
           <div className={styles.headerActions}>
             <Button
@@ -912,7 +1162,7 @@ export function AuthFilesPage() {
                     placeholder={t('auth_files.search_placeholder')}
                   />
                 </div>
-                {!isCodexGroupedView && (
+                {!isGroupedView && (
                   <div className={styles.filterItem}>
                     <label>{t('auth_files.page_size_label')}</label>
                     <input
@@ -1015,31 +1265,15 @@ export function AuthFilesPage() {
                 title={t('auth_files.search_empty_title')}
                 description={t('auth_files.search_empty_desc')}
               />
+            ) : isAllGroupedView ? (
+              <div className={styles.providerGroups}>{providerGroups.map(renderProviderGroup)}</div>
             ) : isCodexGroupedView ? (
-              <div className={styles.fileGroups}>
-                {codexGroups.map((group) => (
-                  <section key={group.key} className={styles.fileGroup}>
-                    <h3 className={styles.fileGroupTitle}>
-                      <span>{group.label}</span>
-                      <span className={styles.fileGroupCount}>{group.files.length}</span>
-                    </h3>
-                    <div
-                      className={`${styles.fileGrid} ${styles.fileGridQuotaManaged} ${compactMode ? styles.fileGridCompact : ''}`}
-                    >
-                      {group.files.map(renderAuthFileCard)}
-                    </div>
-                  </section>
-                ))}
-              </div>
+              renderCodexFileGroups(pageItems)
             ) : (
-              <div
-                className={`${styles.fileGrid} ${quotaFilterType ? styles.fileGridQuotaManaged : ''} ${compactMode ? styles.fileGridCompact : ''}`}
-              >
-                {pageItems.map(renderAuthFileCard)}
-              </div>
+              renderAuthFileGrid(pageItems, Boolean(quotaFilterType))
             )}
 
-            {!loading && !isCodexGroupedView && sorted.length > pageSize && (
+            {!loading && !isGroupedView && sorted.length > pageSize && (
               <div className={styles.pagination}>
                 <Button
                   variant="secondary"
@@ -1105,6 +1339,12 @@ export function AuthFilesPage() {
         models={modelsList}
         excluded={excluded}
         onClose={closeModelsModal}
+        onCopyText={copyTextWithNotification}
+      />
+
+      <AuthFileDetailsModal
+        file={detailsFile}
+        onClose={() => setDetailsFile(null)}
         onCopyText={copyTextWithNotification}
       />
 

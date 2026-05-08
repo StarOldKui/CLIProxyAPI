@@ -46,26 +46,48 @@
   }
 }
 
-.titleWrapper {
-  display: flex;
-  align-items: center;
-  gap: $spacing-sm;
-  line-height: 24px;
+.quotaRefreshSummary {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-.countBadge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 24px;
-  min-width: 24px;
-  padding: 0 8px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--count-badge-text);
-  background-color: var(--count-badge-bg);
-  box-sizing: border-box;
+.quotaRefreshTile {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 132px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 68%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-secondary) 54%, transparent);
+
+  span {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  strong {
+    color: var(--text-primary);
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  small {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+}
+
+.quotaRefreshCountdown {
+  color: var(--success-color, #22c55e) !important;
 }
 
 .errorBox {
@@ -353,6 +375,92 @@
 }
 
 .fileGroups {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+.providerGroups {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+.providerGroup {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-secondary) 38%, transparent);
+
+  @include mobile {
+    padding: 12px;
+  }
+}
+
+.providerGroupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-md;
+  padding-bottom: $spacing-sm;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 64%, transparent);
+}
+
+.providerGroupTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.providerGroupIconWrap {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+}
+
+.providerGroupIcon {
+  width: 17px;
+  height: 17px;
+  object-fit: contain;
+}
+
+.providerGroupIconFallback {
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.providerGroupCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-width: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  background: color-mix(in srgb, var(--bg-tertiary) 82%, transparent);
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.providerGroupBody {
   display: flex;
   flex-direction: column;
   gap: $spacing-lg;
@@ -1836,8 +1944,276 @@
 
 // Details modal.
 .detailContent {
-  max-height: 400px;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+}
+
+.detailTitle {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+
+  small {
+    max-width: min(720px, 72vw);
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+}
+
+.detailHero {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: $spacing-md;
+  padding: $spacing-md;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-secondary) 84%, transparent), transparent),
+    var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+
+  @include mobile {
+    flex-direction: column;
+  }
+}
+
+.detailHeroMain {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 18px;
+    line-height: 1.35;
+    word-break: break-word;
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+}
+
+.detailTypeBadge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary-color) 20%, transparent);
+  color: var(--primary-color);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.detailMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(84px, 1fr));
+  gap: $spacing-sm;
+  min-width: min(360px, 100%);
+
+  @include mobile {
+    min-width: 0;
+  }
+}
+
+.detailMetric {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 76px;
+  padding: $spacing-sm;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+
+  span {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  strong {
+    color: var(--text-primary);
+    font-size: 22px;
+    line-height: 1;
+  }
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: $spacing-md;
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.detailPanel {
+  padding: $spacing-md;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+
+  h4 {
+    margin: 0 0 $spacing-sm;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}
+
+.detailSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-sm;
+  margin-bottom: $spacing-sm;
+
+  h4 {
+    margin: 0;
+  }
+
+  span {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+}
+
+.detailFieldGrid,
+.detailQuotaMeta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px $spacing-md;
+
+  @include mobile {
+    grid-template-columns: 1fr;
+  }
+}
+
+.detailQuotaMeta {
+  margin-bottom: $spacing-md;
+}
+
+.detailField {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.detailFieldLabel {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.detailFieldValue {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.detailQuotaList {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.detailQuotaLine {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.detailQuotaLineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-sm;
+  color: var(--text-secondary);
+  font-size: 13px;
+
+  span {
+    min-width: 0;
+    word-break: break-word;
+  }
+
+  strong {
+    color: var(--text-primary);
+  }
+}
+
+.detailStatusBar {
+  padding-top: 2px;
+}
+
+.detailMessage {
+  width: 100%;
+  margin: $spacing-sm 0 0;
+  padding: $spacing-sm;
+  border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detailDiagnosisSuccess {
+  border-color: color-mix(in srgb, var(--success-color) 40%, var(--border-color));
+  background: color-mix(in srgb, var(--success-badge-bg) 42%, var(--bg-primary));
+}
+
+.detailDiagnosisWarning {
+  border-color: color-mix(in srgb, var(--warning-border) 54%, var(--border-color));
+  background: color-mix(in srgb, var(--warning-bg) 34%, var(--bg-primary));
+}
+
+.detailDiagnosisDanger {
+  border-color: color-mix(in srgb, var(--danger-color) 42%, var(--border-color));
+  background: color-mix(in srgb, var(--bg-error-light) 42%, var(--bg-primary));
+}
+
+.detailRawBlock {
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+  overflow: hidden;
+
+  summary {
+    cursor: pointer;
+    padding: $spacing-sm $spacing-md;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+  }
 }
 
 .jsonContent {

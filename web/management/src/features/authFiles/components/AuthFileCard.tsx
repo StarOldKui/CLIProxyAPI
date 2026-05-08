@@ -49,6 +49,7 @@ export type AuthFileCardProps = {
   quotaFilterType: QuotaProviderType | null;
   statusBarCache: Map<string, AuthFileStatusBarData>;
   onShowModels: (file: AuthFileItem) => void;
+  onShowDetails: (file: AuthFileItem) => void;
   onDownload: (name: string) => void;
   onOpenPrefixProxyEditor: (file: AuthFileItem) => void;
   onDelete: (name: string) => void;
@@ -75,6 +76,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     quotaFilterType,
     statusBarCache,
     onShowModels,
+    onShowDetails,
     onDownload,
     onOpenPrefixProxyEditor,
     onDelete,
@@ -94,8 +96,8 @@ export function AuthFileCard(props: AuthFileCardProps) {
   const typeLabel = getTypeLabel(t, file.type || 'unknown');
   const providerIcon = getAuthFileIcon(file.type || 'unknown', resolvedTheme);
 
-  const quotaType =
-    quotaFilterType && resolveQuotaType(file) === quotaFilterType ? quotaFilterType : null;
+  const fileQuotaType = resolveQuotaType(file);
+  const quotaType = quotaFilterType && fileQuotaType !== quotaFilterType ? null : fileQuotaType;
 
   const showQuotaLayout = Boolean(quotaType) && !isRuntimeOnly && !compact;
 
@@ -124,7 +126,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
   const priorityValue = parsePriorityValue(file.priority ?? file['priority']);
   const noteValue = typeof file.note === 'string' ? file.note.trim() : '';
   const stateLabel = isRuntimeOnly
-    ? t('auth_files.type_virtual') || '虚拟认证文件'
+    ? t('auth_files.type_virtual') || 'Virtual auth file'
     : file.disabled
       ? t('auth_files.health_status_disabled')
       : hasStatusWarning
@@ -264,7 +266,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
                   size="sm"
                   onClick={() => onShowModels(file)}
                   className={`${styles.primaryActionButton} ${styles.modelsActionButton}`}
-                  title={t('auth_files.models_button', { defaultValue: '模型' })}
+                  title={t('auth_files.models_button', { defaultValue: 'Models' })}
                   disabled={disableControls}
                 >
                   <>
@@ -272,13 +274,22 @@ export function AuthFileCard(props: AuthFileCardProps) {
                       <IconModelCluster className={styles.actionIcon} size={16} />
                     </span>
                     <span className={styles.actionButtonLabel}>
-                      {t('auth_files.models_button', { defaultValue: '模型' })}
+                      {t('auth_files.models_button', { defaultValue: 'Models' })}
                     </span>
                   </>
                 </Button>
               )}
               {!isRuntimeOnly && (
                 <div className={styles.cardUtilityActions}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onShowDetails(file)}
+                    className={styles.iconButton}
+                    title={t('auth_files.details_button')}
+                  >
+                    <IconInfo className={styles.actionIcon} size={16} />
+                  </Button>
                   <Button
                     variant="secondary"
                     size="sm"
