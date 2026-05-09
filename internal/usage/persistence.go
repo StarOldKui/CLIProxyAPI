@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultSnapshotFlushInterval = 30 * time.Second
+	defaultSnapshotFlushInterval = 15 * time.Minute
 	snapshotFileMode             = 0o600
 	snapshotDirMode              = 0o700
 )

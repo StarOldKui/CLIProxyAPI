@@ -34,7 +34,7 @@ import {
   authFilesApi,
   getApiCallErrorMessage,
   quotaApi,
-  type CodexQuotaSnapshot,
+  type QuotaSnapshot,
 } from '@/services/api';
 import { useQuotaStore } from '@/stores';
 import {
@@ -92,7 +92,12 @@ const QUOTA_PROGRESS_MEDIUM_THRESHOLD = 30;
 const geminiCliSupplementaryRequestIds = new Map<string, number>();
 const geminiCliSupplementaryCache = new Map<
   string,
-  { requestId: number; tierLabel: string | null; tierId: string | null; creditBalance: number | null }
+  {
+    requestId: number;
+    tierLabel: string | null;
+    tierId: string | null;
+    creditBalance: number | null;
+  }
 >();
 
 export interface QuotaStore {
@@ -283,18 +288,56 @@ const fetchAntigravityQuota = async (
   throw createStatusError(lastError || t('common.unknown_error'), priorityStatus ?? lastStatus);
 };
 
+const getCachedAntigravityQuotaState = (
+  file: AuthFileItem,
+  t: TFunction
+): AntigravityQuotaState | null => {
+  const snapshot = quotaSnapshotFromFile(file);
+  if (!snapshot) return null;
+  if (snapshot.status === 'error') {
+    return {
+      status: 'error',
+      groups: [],
+      error: snapshot.error || t('common.unknown_error'),
+      errorStatus: snapshot.status_code,
+    };
+  }
+
+  const payload = parseAntigravityPayload(snapshot.body);
+  const models = payload?.models;
+  if (!models || typeof models !== 'object' || Array.isArray(models)) {
+    return {
+      status: 'error',
+      groups: [],
+      error: t('antigravity_quota.empty_models'),
+      errorStatus: snapshot.status_code,
+    };
+  }
+  return {
+    status: 'success',
+    groups: buildAntigravityQuotaGroups(models as AntigravityModelsPayload),
+  };
+};
+
 const buildCodexQuotaWindows = (payload: CodexUsagePayload, t: TFunction): CodexQuotaWindow[] => {
   const FIVE_HOUR_SECONDS = 18000;
   const WEEK_SECONDS = 604800;
   const WINDOW_META = {
     codeFiveHour: { id: 'five-hour', labelKey: 'codex_quota.primary_window' },
     codeWeekly: { id: 'weekly', labelKey: 'codex_quota.secondary_window' },
-    codeReviewFiveHour: { id: 'code-review-five-hour', labelKey: 'codex_quota.code_review_primary_window' },
-    codeReviewWeekly: { id: 'code-review-weekly', labelKey: 'codex_quota.code_review_secondary_window' },
+    codeReviewFiveHour: {
+      id: 'code-review-five-hour',
+      labelKey: 'codex_quota.code_review_primary_window',
+    },
+    codeReviewWeekly: {
+      id: 'code-review-weekly',
+      labelKey: 'codex_quota.code_review_secondary_window',
+    },
   } as const;
 
   const rateLimit = payload.rate_limit ?? payload.rateLimit ?? undefined;
-  const codeReviewLimit = payload.code_review_rate_limit ?? payload.codeReviewRateLimit ?? undefined;
+  const codeReviewLimit =
+    payload.code_review_rate_limit ?? payload.codeReviewRateLimit ?? undefined;
   const additionalRateLimits = payload.additional_rate_limits ?? payload.additionalRateLimits ?? [];
   const windows: CodexQuotaWindow[] = [];
 
@@ -358,7 +401,8 @@ const buildCodexQuotaWindows = (payload: CodexUsagePayload, t: TFunction): Codex
         fiveHourWindow = primaryWindow && primaryWindow !== weeklyWindow ? primaryWindow : null;
       }
       if (!weeklyWindow) {
-        weeklyWindow = secondaryWindow && secondaryWindow !== fiveHourWindow ? secondaryWindow : null;
+        weeklyWindow =
+          secondaryWindow && secondaryWindow !== fiveHourWindow ? secondaryWindow : null;
       }
     }
 
@@ -426,7 +470,8 @@ const buildCodexQuotaWindows = (payload: CodexUsagePayload, t: TFunction): Codex
 
       const idPrefix = normalizeWindowId(limitName) || `additional-${index + 1}`;
       const additionalPrimaryWindow = rateInfo.primary_window ?? rateInfo.primaryWindow ?? null;
-      const additionalSecondaryWindow = rateInfo.secondary_window ?? rateInfo.secondaryWindow ?? null;
+      const additionalSecondaryWindow =
+        rateInfo.secondary_window ?? rateInfo.secondaryWindow ?? null;
       const additionalLimitReached = rateInfo.limit_reached ?? rateInfo.limitReached;
       const additionalAllowed = rateInfo.allowed;
 
@@ -454,22 +499,22 @@ const buildCodexQuotaWindows = (payload: CodexUsagePayload, t: TFunction): Codex
   return windows;
 };
 
-const snapshotValue = (snapshot: unknown): CodexQuotaSnapshot | null => {
+const snapshotValue = (snapshot: unknown): QuotaSnapshot | null => {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
-  return snapshot as CodexQuotaSnapshot;
+  return snapshot as QuotaSnapshot;
 };
 
-const codexSnapshotFromFile = (file: AuthFileItem): CodexQuotaSnapshot | null =>
-  snapshotValue(file.codex_quota ?? file.codexQuota);
+export const quotaSnapshotFromFile = (file: AuthFileItem): QuotaSnapshot | null =>
+  snapshotValue(file.quota ?? file.codex_quota ?? file.codexQuota);
 
-const codexCachedStateKey = (file: AuthFileItem): string => {
-  const snapshot = codexSnapshotFromFile(file);
+const quotaCachedStateKey = (file: AuthFileItem): string => {
+  const snapshot = quotaSnapshotFromFile(file);
   return `${snapshot?.updated_at ?? ''}:${snapshot?.status ?? ''}:${snapshot?.status_code ?? ''}`;
 };
 
 const buildCodexQuotaDataFromSnapshot = (
   file: AuthFileItem,
-  snapshot: CodexQuotaSnapshot,
+  snapshot: QuotaSnapshot,
   t: TFunction
 ): {
   planType: string | null;
@@ -507,11 +552,8 @@ const buildCodexQuotaDataFromSnapshot = (
   };
 };
 
-const getCachedCodexQuotaState = (
-  file: AuthFileItem,
-  t: TFunction
-): CodexQuotaState | null => {
-  const snapshot = codexSnapshotFromFile(file);
+const getCachedCodexQuotaState = (file: AuthFileItem, t: TFunction): CodexQuotaState | null => {
+  const snapshot = quotaSnapshotFromFile(file);
   if (!snapshot) return null;
   try {
     const data = buildCodexQuotaDataFromSnapshot(file, snapshot, t);
@@ -573,8 +615,7 @@ const resolveGeminiCliTierLabel = (
   if (!payload) return null;
   const currentTier: GeminiCliUserTier | null | undefined =
     payload.currentTier ?? payload.current_tier;
-  const paidTier: GeminiCliUserTier | null | undefined =
-    payload.paidTier ?? payload.paid_tier;
+  const paidTier: GeminiCliUserTier | null | undefined = payload.paidTier ?? payload.paid_tier;
   const rawId = normalizeStringValue(paidTier?.id) ?? normalizeStringValue(currentTier?.id);
   if (!rawId) return null;
   const tierId = rawId.toLowerCase();
@@ -582,14 +623,11 @@ const resolveGeminiCliTierLabel = (
   return labelKey ? t(`gemini_cli_quota.${labelKey}`) : rawId;
 };
 
-const resolveGeminiCliTierId = (
-  payload: GeminiCliCodeAssistPayload | null
-): string | null => {
+const resolveGeminiCliTierId = (payload: GeminiCliCodeAssistPayload | null): string | null => {
   if (!payload) return null;
   const currentTier: GeminiCliUserTier | null | undefined =
     payload.currentTier ?? payload.current_tier;
-  const paidTier: GeminiCliUserTier | null | undefined =
-    payload.paidTier ?? payload.paid_tier;
+  const paidTier: GeminiCliUserTier | null | undefined = payload.paidTier ?? payload.paid_tier;
   const rawId = normalizeStringValue(paidTier?.id) ?? normalizeStringValue(currentTier?.id);
   return rawId ? rawId.toLowerCase() : null;
 };
@@ -598,14 +636,12 @@ const resolveGeminiCliCreditBalance = (
   payload: GeminiCliCodeAssistPayload | null
 ): number | null => {
   if (!payload) return null;
-  const paidTier: GeminiCliUserTier | null | undefined =
-    payload.paidTier ?? payload.paid_tier;
+  const paidTier: GeminiCliUserTier | null | undefined = payload.paidTier ?? payload.paid_tier;
   const currentTier: GeminiCliUserTier | null | undefined =
     payload.currentTier ?? payload.current_tier;
   const tier = paidTier ?? currentTier;
   if (!tier) return null;
-  const credits: GeminiCliCredits[] =
-    tier.availableCredits ?? tier.available_credits ?? [];
+  const credits: GeminiCliCredits[] = tier.availableCredits ?? tier.available_credits ?? [];
   let total = 0;
   let found = false;
   for (const credit of credits) {
@@ -720,6 +756,59 @@ const scheduleGeminiCliSupplementaryRefresh = (
   return requestId;
 };
 
+const buildGeminiCliQuotaDataFromSnapshot = (
+  snapshot: QuotaSnapshot,
+  t: TFunction
+): {
+  buckets: GeminiCliQuotaBucketState[];
+  tierLabel: string | null;
+  tierId: string | null;
+  creditBalance: number | null;
+} => {
+  if (snapshot.status === 'error') {
+    throw createStatusError(snapshot.error || t('common.unknown_error'), snapshot.status_code);
+  }
+
+  const payload = parseGeminiCliQuotaPayload(snapshot.body);
+  const buckets = Array.isArray(payload?.buckets) ? payload?.buckets : [];
+  const parsedBuckets = buckets
+    .map((bucket) => {
+      const modelId = normalizeGeminiCliModelId(bucket.modelId ?? bucket.model_id);
+      if (!modelId) return null;
+      const tokenType = normalizeStringValue(bucket.tokenType ?? bucket.token_type);
+      const remainingFractionRaw = normalizeQuotaFraction(
+        bucket.remainingFraction ?? bucket.remaining_fraction
+      );
+      const remainingAmount = normalizeNumberValue(
+        bucket.remainingAmount ?? bucket.remaining_amount
+      );
+      const resetTime = normalizeStringValue(bucket.resetTime ?? bucket.reset_time) ?? undefined;
+      let fallbackFraction: number | null = null;
+      if (remainingAmount !== null) {
+        fallbackFraction = remainingAmount <= 0 ? 0 : null;
+      } else if (resetTime) {
+        fallbackFraction = 0;
+      }
+      const remainingFraction = remainingFractionRaw ?? fallbackFraction;
+      return {
+        modelId,
+        tokenType,
+        remainingFraction,
+        remainingAmount,
+        resetTime,
+      };
+    })
+    .filter((bucket): bucket is GeminiCliParsedBucket => bucket !== null);
+
+  const supplementaryPayload = parseGeminiCliCodeAssistPayload(snapshot.supplementary_body);
+  return {
+    buckets: buildGeminiCliQuotaBuckets(parsedBuckets),
+    tierLabel: resolveGeminiCliTierLabel(supplementaryPayload, t),
+    tierId: resolveGeminiCliTierId(supplementaryPayload),
+    creditBalance: resolveGeminiCliCreditBalance(supplementaryPayload),
+  };
+};
+
 const fetchGeminiCliQuota = async (
   file: AuthFileItem,
   t: TFunction
@@ -753,39 +842,6 @@ const fetchGeminiCliQuota = async (
     throw createStatusError(getApiCallErrorMessage(quotaResponse), quotaResponse.statusCode);
   }
 
-  const payload = parseGeminiCliQuotaPayload(quotaResponse.body ?? quotaResponse.bodyText);
-  const buckets = Array.isArray(payload?.buckets) ? payload?.buckets : [];
-
-  const parsedBuckets = buckets
-    .map((bucket) => {
-      const modelId = normalizeGeminiCliModelId(bucket.modelId ?? bucket.model_id);
-      if (!modelId) return null;
-      const tokenType = normalizeStringValue(bucket.tokenType ?? bucket.token_type);
-      const remainingFractionRaw = normalizeQuotaFraction(
-        bucket.remainingFraction ?? bucket.remaining_fraction
-      );
-      const remainingAmount = normalizeNumberValue(
-        bucket.remainingAmount ?? bucket.remaining_amount
-      );
-      const resetTime = normalizeStringValue(bucket.resetTime ?? bucket.reset_time) ?? undefined;
-      let fallbackFraction: number | null = null;
-      if (remainingAmount !== null) {
-        fallbackFraction = remainingAmount <= 0 ? 0 : null;
-      } else if (resetTime) {
-        fallbackFraction = 0;
-      }
-      const remainingFraction = remainingFractionRaw ?? fallbackFraction;
-      return {
-        modelId,
-        tokenType,
-        remainingFraction,
-        remainingAmount,
-        resetTime,
-      };
-    })
-    .filter((bucket): bucket is GeminiCliParsedBucket => bucket !== null);
-
-  const builtBuckets = buildGeminiCliQuotaBuckets(parsedBuckets);
   const supplementaryRequestId = scheduleGeminiCliSupplementaryRefresh(
     file.name,
     authIndex,
@@ -796,15 +852,47 @@ const fetchGeminiCliQuota = async (
     file.name,
     supplementaryRequestId
   );
+  const data = buildGeminiCliQuotaDataFromSnapshot(
+    {
+      status: 'success',
+      body: String(quotaResponse.body ?? quotaResponse.bodyText ?? ''),
+    },
+    t
+  );
 
   return {
     fileName: file.name,
     supplementaryRequestId,
-    buckets: builtBuckets,
+    buckets: data.buckets,
     tierLabel: supplementarySnapshot.tierLabel,
     tierId: supplementarySnapshot.tierId,
     creditBalance: supplementarySnapshot.creditBalance,
   };
+};
+
+const getCachedGeminiCliQuotaState = (
+  file: AuthFileItem,
+  t: TFunction
+): GeminiCliQuotaState | null => {
+  const snapshot = quotaSnapshotFromFile(file);
+  if (!snapshot) return null;
+  try {
+    const data = buildGeminiCliQuotaDataFromSnapshot(snapshot, t);
+    return {
+      status: 'success',
+      buckets: data.buckets,
+      tierLabel: data.tierLabel,
+      tierId: data.tierId,
+      creditBalance: data.creditBalance,
+    };
+  } catch (err: unknown) {
+    return {
+      status: 'error',
+      buckets: [],
+      error: err instanceof Error ? err.message : snapshot.error || t('common.unknown_error'),
+      errorStatus: getStatusFromError(err) ?? snapshot.status_code,
+    };
+  }
 };
 
 const renderAntigravityItems = (
@@ -1024,7 +1112,11 @@ const renderGeminiCliItems = (
 
   if (buckets.length === 0) {
     nodes.push(
-      h('div', { key: 'empty', className: styleMap.quotaMessage }, t('gemini_cli_quota.empty_buckets'))
+      h(
+        'div',
+        { key: 'empty', className: styleMap.quotaMessage },
+        t('gemini_cli_quota.empty_buckets')
+      )
     );
     return h(Fragment, null, ...nodes);
   }
@@ -1138,8 +1230,12 @@ const resolveClaudePlanType = (profile: ClaudeProfileResponse | null): string | 
   const hasClaudePro = normalizeFlagValue(profile.account?.has_claude_pro);
   if (hasClaudePro) return 'plan_pro';
 
-  const organizationType = normalizeStringValue(profile.organization?.organization_type)?.toLowerCase();
-  const subscriptionStatus = normalizeStringValue(profile.organization?.subscription_status)?.toLowerCase();
+  const organizationType = normalizeStringValue(
+    profile.organization?.organization_type
+  )?.toLowerCase();
+  const subscriptionStatus = normalizeStringValue(
+    profile.organization?.subscription_status
+  )?.toLowerCase();
 
   if (organizationType === 'claude_team' && subscriptionStatus === 'active') {
     return 'plan_team';
@@ -1153,7 +1249,11 @@ const resolveClaudePlanType = (profile: ClaudeProfileResponse | null): string | 
 const fetchClaudeQuota = async (
   file: AuthFileItem,
   t: TFunction
-): Promise<{ windows: ClaudeQuotaWindow[]; extraUsage?: ClaudeExtraUsage | null; planType?: string | null }> => {
+): Promise<{
+  windows: ClaudeQuotaWindow[];
+  extraUsage?: ClaudeExtraUsage | null;
+  planType?: string | null;
+}> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
   if (!authIndex) {
@@ -1201,6 +1301,36 @@ const fetchClaudeQuota = async (
       : null;
 
   return { windows, extraUsage: payload.extra_usage, planType };
+};
+
+const getCachedClaudeQuotaState = (file: AuthFileItem, t: TFunction): ClaudeQuotaState | null => {
+  const snapshot = quotaSnapshotFromFile(file);
+  if (!snapshot) return null;
+  if (snapshot.status === 'error') {
+    return {
+      status: 'error',
+      windows: [],
+      error: snapshot.error || t('common.unknown_error'),
+      errorStatus: snapshot.status_code,
+    };
+  }
+
+  const payload = parseClaudeUsagePayload(snapshot.body);
+  if (!payload) {
+    return {
+      status: 'error',
+      windows: [],
+      error: t('claude_quota.empty_windows'),
+      errorStatus: snapshot.status_code,
+    };
+  }
+
+  return {
+    status: 'success',
+    windows: buildClaudeQuotaWindows(payload, t),
+    extraUsage: payload.extra_usage,
+    planType: resolveClaudePlanType(parseClaudeProfilePayload(snapshot.profile_body)),
+  };
 };
 
 const renderClaudeItems = (
@@ -1303,6 +1433,8 @@ export const CLAUDE_CONFIG: QuotaConfig<
     error: message,
     errorStatus: status,
   }),
+  getCachedState: getCachedClaudeQuotaState,
+  getCachedStateKey: quotaCachedStateKey,
   cardClassName: styles.claudeCard,
   controlsClassName: styles.claudeControls,
   controlClassName: styles.claudeControl,
@@ -1326,6 +1458,8 @@ export const ANTIGRAVITY_CONFIG: QuotaConfig<AntigravityQuotaState, AntigravityQ
     error: message,
     errorStatus: status,
   }),
+  getCachedState: getCachedAntigravityQuotaState,
+  getCachedStateKey: quotaCachedStateKey,
   cardClassName: styles.antigravityCard,
   controlsClassName: styles.antigravityControls,
   controlClassName: styles.antigravityControl,
@@ -1372,7 +1506,7 @@ export const CODEX_CONFIG: QuotaConfig<
   sortFiles: sortCodexFiles,
   groupFiles: groupCodexFiles,
   getCachedState: getCachedCodexQuotaState,
-  getCachedStateKey: codexCachedStateKey,
+  getCachedStateKey: quotaCachedStateKey,
   renderQuotaItems: renderCodexItems,
 };
 
@@ -1395,7 +1529,13 @@ export const GEMINI_CLI_CONFIG: QuotaConfig<
   fetchQuota: fetchGeminiCliQuota,
   storeSelector: (state) => state.geminiCliQuota,
   storeSetter: 'setGeminiCliQuota',
-  buildLoadingState: () => ({ status: 'loading', buckets: [], tierLabel: null, tierId: null, creditBalance: null }),
+  buildLoadingState: () => ({
+    status: 'loading',
+    buckets: [],
+    tierLabel: null,
+    tierId: null,
+    creditBalance: null,
+  }),
   buildSuccessState: (data) => {
     const supplementarySnapshot = readGeminiCliSupplementarySnapshot(
       data.fileName,
@@ -1416,6 +1556,8 @@ export const GEMINI_CLI_CONFIG: QuotaConfig<
     error: message,
     errorStatus: status,
   }),
+  getCachedState: getCachedGeminiCliQuotaState,
+  getCachedStateKey: quotaCachedStateKey,
   cardClassName: styles.geminiCliCard,
   controlsClassName: styles.geminiCliControls,
   controlClassName: styles.geminiCliControl,
@@ -1423,10 +1565,7 @@ export const GEMINI_CLI_CONFIG: QuotaConfig<
   renderQuotaItems: renderGeminiCliItems,
 };
 
-const fetchKimiQuota = async (
-  file: AuthFileItem,
-  t: TFunction
-): Promise<KimiQuotaRow[]> => {
+const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<KimiQuotaRow[]> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
   if (!authIndex) {
@@ -1450,6 +1589,34 @@ const fetchKimiQuota = async (
   }
 
   return buildKimiQuotaRows(payload);
+};
+
+const getCachedKimiQuotaState = (file: AuthFileItem, t: TFunction): KimiQuotaState | null => {
+  const snapshot = quotaSnapshotFromFile(file);
+  if (!snapshot) return null;
+  if (snapshot.status === 'error') {
+    return {
+      status: 'error',
+      rows: [],
+      error: snapshot.error || t('common.unknown_error'),
+      errorStatus: snapshot.status_code,
+    };
+  }
+
+  const payload = parseKimiUsagePayload(snapshot.body);
+  if (!payload) {
+    return {
+      status: 'error',
+      rows: [],
+      error: t('kimi_quota.empty_data'),
+      errorStatus: snapshot.status_code,
+    };
+  }
+
+  return {
+    status: 'success',
+    rows: buildKimiQuotaRows(payload),
+  };
 };
 
 const renderKimiItems = (
@@ -1477,7 +1644,7 @@ const renderKimiItems = (
     const percentLabel = remaining === null ? '--' : `${remaining}%`;
     const rowLabel = row.labelKey
       ? t(row.labelKey, (row.labelParams ?? {}) as Record<string, string | number>)
-      : row.label ?? '';
+      : (row.label ?? '');
     const resetLabel = formatKimiResetHint(t, row.resetHint);
 
     return h(
@@ -1491,12 +1658,8 @@ const renderKimiItems = (
           'div',
           { className: styleMap.quotaMeta },
           h('span', { className: styleMap.quotaPercent }, percentLabel),
-          limit > 0
-            ? h('span', { className: styleMap.quotaAmount }, `${used} / ${limit}`)
-            : null,
-          resetLabel
-            ? h('span', { className: styleMap.quotaReset }, resetLabel)
-            : null
+          limit > 0 ? h('span', { className: styleMap.quotaAmount }, `${used} / ${limit}`) : null,
+          resetLabel ? h('span', { className: styleMap.quotaReset }, resetLabel) : null
         )
       ),
       h(QuotaProgressBar, {
@@ -1524,6 +1687,8 @@ export const KIMI_CONFIG: QuotaConfig<KimiQuotaState, KimiQuotaRow[]> = {
     error: message,
     errorStatus: status,
   }),
+  getCachedState: getCachedKimiQuotaState,
+  getCachedStateKey: quotaCachedStateKey,
   cardClassName: styles.kimiCard,
   controlsClassName: styles.kimiControls,
   controlClassName: styles.kimiControl,

@@ -114,7 +114,7 @@ func TestRefreshCodexQuota_SavesSnapshotAndSendsAccountHeader(t *testing.T) {
 	if !ok {
 		t.Fatal("expected auth to remain registered")
 	}
-	snapshot := codexQuotaSnapshotFromMetadata(t, updated.Metadata)
+	snapshot := quotaSnapshotFromMetadata(t, updated.Metadata)
 	if snapshot.Status != "success" {
 		t.Fatalf("snapshot status = %q, want success", snapshot.Status)
 	}
@@ -158,7 +158,7 @@ func TestRefreshCodexQuota_SavesErrorSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("expected auth to remain registered")
 	}
-	stored := codexQuotaSnapshotFromMetadata(t, updated.Metadata)
+	stored := quotaSnapshotFromMetadata(t, updated.Metadata)
 	if stored.Status != "error" || stored.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("stored snapshot = %#v, want 401 error", stored)
 	}
@@ -169,7 +169,7 @@ func TestBuildAuthFileEntry_IncludesCodexQuotaSnapshot(t *testing.T) {
 	h := &Handler{}
 	auth := testCodexAuth(t, "auth-1", "alpha.json", "acct-file", "plus", time.Now().Add(time.Hour))
 	auth.Attributes = map[string]string{"path": t.TempDir() + "/alpha.json"}
-	auth.Metadata["codex_quota"] = codexQuotaSnapshot{
+	auth.Metadata["quota"] = quotaSnapshot{
 		Status:     "success",
 		StatusCode: http.StatusOK,
 		UpdatedAt:  now.Format(time.RFC3339),
@@ -180,9 +180,9 @@ func TestBuildAuthFileEntry_IncludesCodexQuotaSnapshot(t *testing.T) {
 	if entry == nil {
 		t.Fatal("expected auth file entry")
 	}
-	rawSnapshot, ok := entry["codex_quota"].(codexQuotaSnapshot)
+	rawSnapshot, ok := entry["quota"].(quotaSnapshot)
 	if !ok {
-		t.Fatalf("codex_quota = %#v, want codexQuotaSnapshot", entry["codex_quota"])
+		t.Fatalf("quota = %#v, want quotaSnapshot", entry["quota"])
 	}
 	if rawSnapshot.PlanType != "plus" {
 		t.Fatalf("snapshot plan type = %q, want plus", rawSnapshot.PlanType)
@@ -237,6 +237,51 @@ func TestCodexQuotaTargets_FiltersCodexOAuthAuths(t *testing.T) {
 	}
 }
 
+func TestQuotaTargets_IncludesSupportedProviders(t *testing.T) {
+	_, manager := newCodexQuotaTestHandler(t)
+	h := &Handler{authManager: manager}
+
+	seedAuths := []*coreauth.Auth{
+		testCodexAuth(t, "codex-oauth", "codex.json", "acct-a", "plus", time.Now().Add(time.Hour)),
+		{
+			ID:       "claude",
+			Provider: "claude",
+			FileName: "claude.json",
+		},
+		{
+			ID:         "codex-api-key",
+			Provider:   "codex",
+			FileName:   "api-key.json",
+			Attributes: map[string]string{"api_key": "sk-test"},
+		},
+		{
+			ID:       "unsupported",
+			Provider: "openai",
+			FileName: "openai.json",
+		},
+	}
+	for _, auth := range seedAuths {
+		if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+			t.Fatalf("failed to register %s: %v", auth.ID, errRegister)
+		}
+	}
+
+	all := h.quotaTargets(nil, true)
+	gotIDs := authIDs(all)
+	gotSet := make(map[string]bool, len(gotIDs))
+	for _, id := range gotIDs {
+		gotSet[id] = true
+	}
+	if len(gotSet) != 2 || !gotSet["codex-oauth"] || !gotSet["claude"] {
+		t.Fatalf("all targets = %#v, want codex-oauth and claude", gotIDs)
+	}
+
+	selected := h.quotaTargets([]string{"claude.json"}, false)
+	if got := authIDs(selected); len(got) != 1 || got[0] != "claude" {
+		t.Fatalf("selected targets = %#v, want claude", got)
+	}
+}
+
 func TestSaveCodexQuotaSnapshot_PreservesLatestTokenMetadata(t *testing.T) {
 	h, manager := newCodexQuotaTestHandler(t)
 	latest := testCodexAuth(t, "auth-1", "alpha.json", "acct-latest", "plus", time.Now().Add(time.Hour))
@@ -250,7 +295,7 @@ func TestSaveCodexQuotaSnapshot_PreservesLatestTokenMetadata(t *testing.T) {
 	stale.Metadata["refresh_token"] = "old-refresh-token"
 	stale.Metadata["access_token"] = "old-access-token"
 
-	if errSave := h.saveCodexQuotaSnapshot(context.Background(), stale, codexQuotaSnapshot{
+	if errSave := h.saveCodexQuotaSnapshot(context.Background(), stale, quotaSnapshot{
 		Status:    "success",
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		PlanType:  "plus",
@@ -268,8 +313,11 @@ func TestSaveCodexQuotaSnapshot_PreservesLatestTokenMetadata(t *testing.T) {
 	if got := updated.Metadata["access_token"]; got != "new-access-token" {
 		t.Fatalf("access_token = %q, want latest token", got)
 	}
-	if _, ok := updated.Metadata["codex_quota"]; !ok {
-		t.Fatal("expected codex quota snapshot to be merged")
+	if _, ok := updated.Metadata["quota"]; !ok {
+		t.Fatal("expected quota snapshot to be merged")
+	}
+	if _, ok := updated.Metadata["codex_quota"]; ok {
+		t.Fatal("expected legacy codex quota snapshot to be removed")
 	}
 }
 
@@ -285,7 +333,7 @@ func TestSaveCodexQuotaSnapshot_ReturnsPersistError(t *testing.T) {
 		t.Fatalf("failed to register auth: %v", errRegister)
 	}
 
-	errSave := h.saveCodexQuotaSnapshot(context.Background(), auth, codexQuotaSnapshot{
+	errSave := h.saveCodexQuotaSnapshot(context.Background(), auth, quotaSnapshot{
 		Status:    "success",
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	}, time.Now())
@@ -384,25 +432,25 @@ func testAccessToken(t *testing.T, accountID string, expiry time.Time) string {
 	})
 }
 
-func codexQuotaSnapshotFromMetadata(t *testing.T, metadata map[string]any) codexQuotaSnapshot {
+func quotaSnapshotFromMetadata(t *testing.T, metadata map[string]any) quotaSnapshot {
 	t.Helper()
-	raw := metadata["codex_quota"]
+	raw := metadata["quota"]
 	switch typed := raw.(type) {
-	case codexQuotaSnapshot:
+	case quotaSnapshot:
 		return typed
 	case map[string]any:
 		data, errMarshal := json.Marshal(typed)
 		if errMarshal != nil {
 			t.Fatalf("failed to marshal snapshot: %v", errMarshal)
 		}
-		var snapshot codexQuotaSnapshot
+		var snapshot quotaSnapshot
 		if errUnmarshal := json.Unmarshal(data, &snapshot); errUnmarshal != nil {
 			t.Fatalf("failed to unmarshal snapshot: %v", errUnmarshal)
 		}
 		return snapshot
 	default:
-		t.Fatalf("codex_quota = %#v, want snapshot", raw)
-		return codexQuotaSnapshot{}
+		t.Fatalf("quota = %#v, want snapshot", raw)
+		return quotaSnapshot{}
 	}
 }
 

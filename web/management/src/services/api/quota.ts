@@ -1,6 +1,6 @@
 import { apiClient } from './client';
 
-export interface CodexQuotaSnapshot {
+export interface QuotaSnapshot {
   status: 'success' | 'error';
   status_code?: number;
   body?: string;
@@ -11,13 +11,18 @@ export interface CodexQuotaSnapshot {
   subscription_active_until?: string | number | null;
   subscriptionActiveStart?: string | number | null;
   subscriptionActiveUntil?: string | number | null;
+  profile_status_code?: number;
+  profile_body?: string;
+  supplementary_status_code?: number;
+  supplementary_body?: string;
 }
 
-export interface CodexQuotaRefreshResponse {
-  results: Record<string, CodexQuotaSnapshot>;
+export interface QuotaRefreshResponse {
+  results: Record<string, QuotaSnapshot>;
 }
 
 export const quotaApi = {
+  refresh: (names: string[]) => apiClient.post<QuotaRefreshResponse>('/quota/refresh', { names }),
   refreshCodex: (names: string[]) =>
-    apiClient.post<CodexQuotaRefreshResponse>('/codex-quota/refresh', { names })
+    apiClient.post<QuotaRefreshResponse>('/quota/refresh', { names }),
 };

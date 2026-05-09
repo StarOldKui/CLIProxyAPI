@@ -41,6 +41,10 @@
     min-width: 0;
   }
 
+  :global(.btn.btn-sm) {
+    height: 42px;
+  }
+
   @include mobile {
     width: 100%;
   }
@@ -334,10 +338,18 @@
 .filterToggleLabel {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.filterToggleIcon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
 }
 
 .pageSizeSelect {

@@ -434,9 +434,11 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	if claims := extractCodexIDTokenClaims(auth); claims != nil {
 		entry["id_token"] = claims
 	}
-	if strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && auth.Metadata != nil {
-		if snapshot, ok := auth.Metadata["codex_quota"]; ok && snapshot != nil {
-			entry["codex_quota"] = snapshot
+	if auth.Metadata != nil {
+		if snapshot, ok := auth.Metadata["quota"]; ok && snapshot != nil {
+			entry["quota"] = snapshot
+		} else if snapshot, ok := auth.Metadata["codex_quota"]; ok && snapshot != nil {
+			entry["quota"] = snapshot
 		}
 	}
 	// Expose priority from Attributes (set by synthesizer from JSON "priority" field).

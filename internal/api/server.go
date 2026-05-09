@@ -312,7 +312,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	redisqueue.SetEnabled(hasManagementSecret)
 	if hasManagementSecret {
 		s.registerManagementRoutes()
-		s.mgmt.StartCodexQuotaAutoRefresh()
+		s.mgmt.StartQuotaAutoRefresh()
 	}
 
 	if optionState.keepAliveEnabled {
@@ -557,6 +557,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
 		mgmt.GET("/usage-queue", s.mgmt.GetUsageQueue)
+		mgmt.POST("/quota/refresh", s.mgmt.RefreshQuota)
 		mgmt.POST("/codex-quota/refresh", s.mgmt.RefreshCodexQuota)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
@@ -925,7 +926,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
 
 	if s.mgmt != nil {
-		s.mgmt.StopCodexQuotaAutoRefresh()
+		s.mgmt.StopQuotaAutoRefresh()
 	}
 
 	if s.keepAliveEnabled {
@@ -1082,9 +1083,9 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 	redisqueue.SetEnabled(s.managementRoutesEnabled.Load())
 	if s.mgmt != nil {
 		if s.managementRoutesEnabled.Load() {
-			s.mgmt.StartCodexQuotaAutoRefresh()
+			s.mgmt.StartQuotaAutoRefresh()
 		} else {
-			s.mgmt.StopCodexQuotaAutoRefresh()
+			s.mgmt.StopQuotaAutoRefresh()
 		}
 	}
 

@@ -61,7 +61,14 @@ import {
   writePersistedAuthFilesCompactMode,
   type AuthFilesSortMode,
 } from '@/features/authFiles/uiState';
-import { CODEX_CONFIG } from '@/components/quota';
+import {
+  ANTIGRAVITY_CONFIG,
+  CLAUDE_CONFIG,
+  CODEX_CONFIG,
+  GEMINI_CLI_CONFIG,
+  KIMI_CONFIG,
+  quotaSnapshotFromFile,
+} from '@/components/quota';
 import { useAuthStore, useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
 import { normalizePlanType, resolveAuthProvider, resolveCodexPlanType } from '@/utils/quota';
 import styles from './AuthFilesPage.module.scss';
@@ -72,13 +79,19 @@ const BATCH_BAR_BASE_TRANSFORM = 'translateX(-50%)';
 const BATCH_BAR_HIDDEN_TRANSFORM = 'translateX(-50%) translateY(56px)';
 const DEFAULT_REGULAR_PAGE_SIZE = 9;
 const DEFAULT_COMPACT_PAGE_SIZE = 12;
-const CODEX_QUOTA_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const AUTH_FILES_STATUS_REFRESH_INTERVAL_MS = 5_000;
+const QUOTA_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 type AuthQuotaState = { status?: string; error?: string; errorStatus?: number } | undefined;
 
 type AuthQuotaMaps = Record<QuotaProviderType, Record<string, AuthQuotaState>>;
 
-type TimestampedQuotaState = { status?: string; updatedAt?: string | null } | undefined;
+type QuotaRefreshSummary = {
+  failed: number;
+  lastRefreshAt: number | null;
+  nextRefreshAt: number | null;
+  success: number;
+};
 
 type ProviderFileGroup = {
   key: string;
@@ -94,14 +107,38 @@ const buildWildcardSearch = (value: string): RegExp | null => {
   return new RegExp(pattern, 'i');
 };
 
-const getQuotaStateForAuthFile = (file: AuthFileItem, quotaMaps: AuthQuotaMaps): AuthQuotaState => {
+const getQuotaConfig = (provider: string) => {
+  if (provider === 'antigravity') return ANTIGRAVITY_CONFIG;
+  if (provider === 'claude') return CLAUDE_CONFIG;
+  if (provider === 'codex') return CODEX_CONFIG;
+  if (provider === 'gemini-cli') return GEMINI_CLI_CONFIG;
+  if (provider === 'kimi') return KIMI_CONFIG;
+  return null;
+};
+
+const getCachedQuotaStateForAuthFile = (
+  file: AuthFileItem,
+  t: ReturnType<typeof useTranslation>['t']
+): AuthQuotaState => {
   const provider = resolveAuthProvider(file);
   if (!QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType)) return undefined;
-  return quotaMaps[provider as QuotaProviderType][file.name];
+  return (getQuotaConfig(provider)?.getCachedState?.(file, t) as AuthQuotaState) ?? undefined;
+};
+
+const getQuotaStateForAuthFile = (
+  file: AuthFileItem,
+  quotaMaps: AuthQuotaMaps,
+  t: ReturnType<typeof useTranslation>['t']
+): AuthQuotaState => {
+  const provider = resolveAuthProvider(file);
+  if (!QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType)) return undefined;
+  return (
+    getCachedQuotaStateForAuthFile(file, t) ?? quotaMaps[provider as QuotaProviderType][file.name]
+  );
 };
 
 const hasAuthFileQuotaSnapshotProblem = (file: AuthFileItem): boolean => {
-  const snapshot = file.codex_quota ?? file.codexQuota;
+  const snapshot = quotaSnapshotFromFile(file);
   return Boolean(
     snapshot &&
     typeof snapshot === 'object' &&
@@ -111,8 +148,12 @@ const hasAuthFileQuotaSnapshotProblem = (file: AuthFileItem): boolean => {
   );
 };
 
-const hasAuthFileQuotaProblem = (file: AuthFileItem, quotaMaps: AuthQuotaMaps): boolean => {
-  const quota = getQuotaStateForAuthFile(file, quotaMaps);
+const hasAuthFileQuotaProblem = (
+  file: AuthFileItem,
+  quotaMaps: AuthQuotaMaps,
+  t: ReturnType<typeof useTranslation>['t']
+): boolean => {
+  const quota = getQuotaStateForAuthFile(file, quotaMaps, t);
   if (quota) {
     return quota.status === 'error' && !isUsageLimitReachedMessage(quota.error ?? '');
   }
@@ -123,27 +164,6 @@ const parseQuotaUpdatedAt = (value?: string | null): number | null => {
   if (!value) return null;
   const time = Date.parse(value);
   return Number.isNaN(time) ? null : time;
-};
-
-const shouldUseCachedQuota = (
-  current: TimestampedQuotaState,
-  cached: TimestampedQuotaState
-): boolean => {
-  if (!cached) return false;
-  if (!current) return true;
-  if (current.status === 'loading') return false;
-
-  const cachedTime = parseQuotaUpdatedAt(cached.updatedAt);
-  const currentTime = parseQuotaUpdatedAt(current.updatedAt);
-  return cachedTime !== null && (currentTime === null || cachedTime > currentTime);
-};
-
-const resolveEffectiveCodexQuota = (
-  current: CodexQuotaState | undefined,
-  cached: CodexQuotaState | null | undefined
-): CodexQuotaState | undefined => {
-  if (cached && shouldUseCachedQuota(current, cached)) return cached;
-  return current ?? cached ?? undefined;
 };
 
 const resolveCodexQuotaSortWindowId = (
@@ -168,10 +188,8 @@ const getCodexRemainingQuotaScore = (
   return Math.max(0, Math.min(100, 100 - clampedUsed));
 };
 
-const isCodexQuotaExhausted = (
-  file: AuthFileItem,
-  quota: CodexQuotaState | undefined
-): boolean => getCodexRemainingQuotaScore(file, quota) === 0;
+const isCodexQuotaExhausted = (file: AuthFileItem, quota: CodexQuotaState | undefined): boolean =>
+  getCodexRemainingQuotaScore(file, quota) === 0;
 
 const formatClockTime = (timestamp: number | null): string => {
   if (timestamp === null) return '';
@@ -190,8 +208,12 @@ const formatCountdown = (remainingMs: number): string => {
   return `${minutes}:${seconds}`;
 };
 
-const isAuthFileQuotaUsageLimited = (file: AuthFileItem, quotaMaps: AuthQuotaMaps): boolean => {
-  const quota = getQuotaStateForAuthFile(file, quotaMaps);
+const isAuthFileQuotaUsageLimited = (
+  file: AuthFileItem,
+  quotaMaps: AuthQuotaMaps,
+  t: ReturnType<typeof useTranslation>['t']
+): boolean => {
+  const quota = getQuotaStateForAuthFile(file, quotaMaps, t);
   if (quota) {
     if (quota.status === 'error' && isUsageLimitReachedMessage(quota.error ?? '')) return true;
     if (resolveAuthProvider(file) === 'codex') {
@@ -200,7 +222,7 @@ const isAuthFileQuotaUsageLimited = (file: AuthFileItem, quotaMaps: AuthQuotaMap
     return false;
   }
 
-  const snapshot = file.codex_quota ?? file.codexQuota;
+  const snapshot = quotaSnapshotFromFile(file);
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false;
 
   if (
@@ -216,6 +238,82 @@ const isAuthFileQuotaUsageLimited = (file: AuthFileItem, quotaMaps: AuthQuotaMap
   return false;
 };
 
+const DisplayOptionIcon = ({ type }: { type: 'problem' | 'disabled' | 'quota' | 'compact' }) => {
+  if (type === 'problem') {
+    return (
+      <svg
+        aria-hidden="true"
+        className={styles.filterToggleIcon}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 9v4" />
+        <path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0" />
+        <path d="M12 16h.01" />
+      </svg>
+    );
+  }
+
+  if (type === 'disabled') {
+    return (
+      <svg
+        aria-hidden="true"
+        className={styles.filterToggleIcon}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M20.042 16.045a9 9 0 0 0 -12.087 -12.087m-2.318 1.677a9 9 0 1 0 12.725 12.73" />
+        <path d="M3 3l18 18" />
+      </svg>
+    );
+  }
+
+  if (type === 'quota') {
+    return (
+      <svg
+        aria-hidden="true"
+        className={styles.filterToggleIcon}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M4 13a8 8 0 0 1 7 7a6 6 0 0 0 3 -5a9 9 0 0 0 6 -8a3 3 0 0 0 -3 -3a9 9 0 0 0 -8 6a6 6 0 0 0 -5 3" />
+        <path d="M7 14a6 6 0 0 0 -3 6a6 6 0 0 0 6 -3" />
+        <path d="M14 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      aria-hidden="true"
+      className={styles.filterToggleIcon}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 21a9 9 0 1 1 0 -18a9 9 0 0 1 0 18" />
+      <path d="M10 10c-.5 -1 -2.5 -1 -3 0" />
+      <path d="M17 10c-.5 -1 -2.5 -1 -3 0" />
+      <path d="M14.5 15a3.5 3.5 0 0 1 -5 0" />
+    </svg>
+  );
+};
+
 export function AuthFilesPage() {
   const { t } = useTranslation();
   const showNotification = useNotificationStore((state) => state.showNotification);
@@ -226,7 +324,6 @@ export function AuthFilesPage() {
   );
   const claudeQuota = useQuotaStore((state) => state.claudeQuota as Record<string, AuthQuotaState>);
   const codexQuota = useQuotaStore((state) => state.codexQuota as Record<string, AuthQuotaState>);
-  const setCodexQuota = useQuotaStore((state) => state.setCodexQuota);
   const geminiCliQuota = useQuotaStore(
     (state) => state.geminiCliQuota as Record<string, AuthQuotaState>
   );
@@ -352,24 +449,6 @@ export function AuthFilesPage() {
   const isAllGroupedView = filter === 'all';
   const isCodexGroupedView = quotaFilterType === 'codex';
   const isGroupedView = isAllGroupedView || isCodexGroupedView;
-
-  useEffect(() => {
-    if (files.length === 0) return;
-    setCodexQuota((prev) => {
-      let changed = false;
-      const next = { ...prev };
-
-      files.forEach((file) => {
-        if (resolveAuthProvider(file) !== 'codex') return;
-        const cached = CODEX_CONFIG.getCachedState?.(file, t);
-        if (!cached || !shouldUseCachedQuota(prev[file.name], cached)) return;
-        next[file.name] = cached;
-        changed = true;
-      });
-
-      return changed ? next : prev;
-    });
-  }, [files, setCodexQuota, t]);
 
   useEffect(() => {
     const persistedCompactMode = readPersistedAuthFilesCompactMode();
@@ -529,9 +608,9 @@ export function AuthFilesPage() {
 
   useInterval(
     () => {
-      void loadFiles().catch(() => {});
+      void loadFiles({ silent: true }).catch(() => {});
     },
-    isCurrentLayer ? 240_000 : null
+    isCurrentLayer ? AUTH_FILES_STATUS_REFRESH_INTERVAL_MS : null
   );
 
   const existingTypes = useMemo(() => {
@@ -549,21 +628,21 @@ export function AuthFilesPage() {
       files.filter((file) => {
         if (
           hideUsageLimited &&
-          (isUsageLimitReachedAuthFile(file) || isAuthFileQuotaUsageLimited(file, quotaMaps))
+          (isUsageLimitReachedAuthFile(file) || isAuthFileQuotaUsageLimited(file, quotaMaps, t))
         ) {
           return false;
         }
         if (
           problemOnly &&
           !hasAuthFileProblemStatus(file) &&
-          !hasAuthFileQuotaProblem(file, quotaMaps)
+          !hasAuthFileQuotaProblem(file, quotaMaps, t)
         ) {
           return false;
         }
         if (disabledOnly && file.disabled !== true) return false;
         return true;
       }),
-    [disabledOnly, files, hideUsageLimited, problemOnly, quotaMaps]
+    [disabledOnly, files, hideUsageLimited, problemOnly, quotaMaps, t]
   );
 
   const sortOptions = useMemo(
@@ -585,27 +664,25 @@ export function AuthFilesPage() {
     return counts;
   }, [filesMatchingStatusFilters]);
 
-  const codexRefreshSummary = useMemo(() => {
+  const quotaRefreshSummary = useMemo<QuotaRefreshSummary>(() => {
     let lastRefreshAt: number | null = null;
     let success = 0;
     let failed = 0;
 
     files.forEach((file) => {
-      if (resolveAuthProvider(file) !== 'codex') return;
-      const cached = CODEX_CONFIG.getCachedState?.(file, t);
-      const effective = resolveEffectiveCodexQuota(
-        codexQuota[file.name] as CodexQuotaState | undefined,
-        cached
-      );
-      if (!effective) return;
+      const provider = resolveAuthProvider(file);
+      if (!QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType)) return;
 
-      if (effective.status === 'success') {
+      const snapshot = quotaSnapshotFromFile(file);
+      if (!snapshot) return;
+
+      if (snapshot.status === 'success') {
         success += 1;
-      } else if (effective.status === 'error') {
+      } else if (snapshot.status === 'error') {
         failed += 1;
       }
 
-      const refreshedAt = parseQuotaUpdatedAt(effective.updatedAt);
+      const refreshedAt = parseQuotaUpdatedAt(snapshot.updated_at);
       if (refreshedAt !== null && (lastRefreshAt === null || refreshedAt > lastRefreshAt)) {
         lastRefreshAt = refreshedAt;
       }
@@ -614,37 +691,16 @@ export function AuthFilesPage() {
     return {
       failed,
       lastRefreshAt,
-      nextRefreshAt:
-        lastRefreshAt === null ? null : lastRefreshAt + CODEX_QUOTA_REFRESH_INTERVAL_MS,
+      nextRefreshAt: lastRefreshAt === null ? null : lastRefreshAt + QUOTA_REFRESH_INTERVAL_MS,
       success,
     };
-  }, [codexQuota, files, t]);
-  const codexQuotaRefreshDue =
-    codexRefreshSummary.nextRefreshAt !== null &&
-    quotaRefreshNowMs >= codexRefreshSummary.nextRefreshAt;
+  }, [files]);
 
   useInterval(
     () => {
       setQuotaRefreshNowMs(Date.now());
     },
-    isCurrentLayer && codexRefreshSummary.nextRefreshAt !== null ? 1000 : null
-  );
-
-  useEffect(() => {
-    if (!isCurrentLayer || !codexQuotaRefreshDue) return;
-
-    const timer = setTimeout(() => {
-      void loadFiles().catch(() => {});
-    }, 3000);
-
-    return () => clearTimeout(timer);
-  }, [codexQuotaRefreshDue, isCurrentLayer, loadFiles]);
-
-  useInterval(
-    () => {
-      void loadFiles().catch(() => {});
-    },
-    isCurrentLayer && codexQuotaRefreshDue ? 15_000 : null
+    isCurrentLayer && quotaRefreshSummary.nextRefreshAt !== null ? 1000 : null
   );
 
   const normalizedSearch = search.trim();
@@ -685,11 +741,10 @@ export function AuthFilesPage() {
       const scoreByName = new Map<string, number | null>();
       const getScore = (file: AuthFileItem) => {
         if (scoreByName.has(file.name)) return scoreByName.get(file.name) ?? null;
-        const cached = CODEX_CONFIG.getCachedState?.(file, t);
-        const effective = resolveEffectiveCodexQuota(
-          codexQuota[file.name] as CodexQuotaState | undefined,
-          cached
-        );
+        const effective =
+          resolveAuthProvider(file) === 'codex'
+            ? (getQuotaStateForAuthFile(file, quotaMaps, t) as CodexQuotaState | undefined)
+            : undefined;
         const score = getCodexRemainingQuotaScore(file, effective);
         scoreByName.set(file.name, score);
         return score;
@@ -715,7 +770,7 @@ export function AuthFilesPage() {
       });
     }
     return copy;
-  }, [codexQuota, filtered, isGroupedView, sortMode, t]);
+  }, [filtered, isGroupedView, quotaMaps, sortMode, t]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -726,17 +781,13 @@ export function AuthFilesPage() {
     const quotaByName: Record<string, CodexQuotaState> = {};
     pageItems.forEach((file) => {
       if (resolveAuthProvider(file) !== 'codex') return;
-      const cached = CODEX_CONFIG.getCachedState?.(file, t);
-      const effective = resolveEffectiveCodexQuota(
-        codexQuota[file.name] as CodexQuotaState | undefined,
-        cached
-      );
+      const effective = getQuotaStateForAuthFile(file, quotaMaps, t) as CodexQuotaState | undefined;
       if (effective) {
         quotaByName[file.name] = effective;
       }
     });
     return quotaByName;
-  }, [codexQuota, isGroupedView, pageItems, t]);
+  }, [isGroupedView, pageItems, quotaMaps, t]);
   const providerGroups = useMemo<ProviderFileGroup[]>(() => {
     if (!isAllGroupedView) return [];
 
@@ -1071,23 +1122,23 @@ export function AuthFilesPage() {
             <div className={styles.quotaRefreshTile}>
               <span>{t('auth_files.quota_refresh_last')}</span>
               <strong>
-                {codexRefreshSummary.lastRefreshAt === null
+                {quotaRefreshSummary.lastRefreshAt === null
                   ? t('auth_files.refresh_not_available')
-                  : formatClockTime(codexRefreshSummary.lastRefreshAt)}
+                  : formatClockTime(quotaRefreshSummary.lastRefreshAt)}
               </strong>
             </div>
             <div className={styles.quotaRefreshTile}>
               <span>{t('auth_files.quota_refresh_next')}</span>
               <strong className={styles.quotaRefreshCountdown}>
-                {codexRefreshSummary.nextRefreshAt === null
+                {quotaRefreshSummary.nextRefreshAt === null
                   ? t('auth_files.refresh_not_available')
-                  : formatCountdown(codexRefreshSummary.nextRefreshAt - quotaRefreshNowMs)}
+                  : formatCountdown(quotaRefreshSummary.nextRefreshAt - quotaRefreshNowMs)}
               </strong>
             </div>
             <div className={styles.quotaRefreshTile}>
               <span>{t('auth_files.quota_refresh_result')}</span>
               <strong>
-                {codexRefreshSummary.success} {t('common.success')} · {codexRefreshSummary.failed}{' '}
+                {quotaRefreshSummary.success} {t('common.success')} · {quotaRefreshSummary.failed}{' '}
                 {t('common.failure')}
               </strong>
             </div>
@@ -1206,7 +1257,8 @@ export function AuthFilesPage() {
                         ariaLabel={t('auth_files.problem_filter_only')}
                         label={
                           <span className={styles.filterToggleLabel}>
-                            {t('auth_files.problem_filter_only')}
+                            <span>{t('auth_files.problem_filter_only')}</span>
+                            <DisplayOptionIcon type="problem" />
                           </span>
                         }
                       />
@@ -1221,7 +1273,8 @@ export function AuthFilesPage() {
                         ariaLabel={t('auth_files.disabled_filter_only')}
                         label={
                           <span className={styles.filterToggleLabel}>
-                            {t('auth_files.disabled_filter_only')}
+                            <span>{t('auth_files.disabled_filter_only')}</span>
+                            <DisplayOptionIcon type="disabled" />
                           </span>
                         }
                       />
@@ -1236,7 +1289,8 @@ export function AuthFilesPage() {
                         ariaLabel={t('auth_files.hide_usage_limited')}
                         label={
                           <span className={styles.filterToggleLabel}>
-                            {t('auth_files.hide_usage_limited')}
+                            <span>{t('auth_files.hide_usage_limited')}</span>
+                            <DisplayOptionIcon type="quota" />
                           </span>
                         }
                       />
@@ -1248,7 +1302,8 @@ export function AuthFilesPage() {
                         ariaLabel={t('auth_files.compact_mode_label')}
                         label={
                           <span className={styles.filterToggleLabel}>
-                            {t('auth_files.compact_mode_label')}
+                            <span>{t('auth_files.compact_mode_label')}</span>
+                            <DisplayOptionIcon type="compact" />
                           </span>
                         }
                       />

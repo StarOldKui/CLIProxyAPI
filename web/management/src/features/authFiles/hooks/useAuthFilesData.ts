@@ -36,7 +36,7 @@ export type UseAuthFilesDataResult = {
   statusUpdating: Record<string, boolean>;
   batchStatusUpdating: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
-  loadFiles: () => Promise<void>;
+  loadFiles: (options?: { silent?: boolean }) => Promise<void>;
   handleUploadClick: () => void;
   handleFileChange: (event: ChangeEvent<HTMLInputElement>) => Promise<void>;
   handleDelete: (name: string) => void;
@@ -163,13 +163,18 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
     });
   }, [files, selectedFiles.size]);
 
-  const loadFiles = useCallback(async () => {
+  const loadFiles = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     const isInitialLoad = !loadedRef.current;
-    setLoading(isInitialLoad);
-    setRefreshing(!isInitialLoad);
-    setError('');
+    if (isInitialLoad) {
+      setLoading(true);
+    }
+    if (!silent) {
+      setRefreshing(!isInitialLoad);
+      setError('');
+    }
     try {
       const data = await authFilesApi.list();
       if (requestId !== requestIdRef.current) return;
@@ -178,7 +183,9 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
     } catch (err: unknown) {
       if (requestId !== requestIdRef.current) return;
       const errorMessage = err instanceof Error ? err.message : t('notification.refresh_failed');
-      setError(errorMessage);
+      if (!silent) {
+        setError(errorMessage);
+      }
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false);

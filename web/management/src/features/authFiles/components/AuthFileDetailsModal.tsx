@@ -3,7 +3,13 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { CODEX_CONFIG } from '@/components/quota';
+import {
+  ANTIGRAVITY_CONFIG,
+  CLAUDE_CONFIG,
+  CODEX_CONFIG,
+  GEMINI_CLI_CONFIG,
+  KIMI_CONFIG,
+} from '@/components/quota';
 import { ProviderStatusBar } from '@/components/providers/ProviderStatusBar';
 import { useQuotaStore } from '@/stores';
 import type {
@@ -83,10 +89,7 @@ const formatDateTime = (value: unknown): string => {
   return date ? date.toLocaleString() : '-';
 };
 
-const formatTimeRemaining = (
-  value: unknown,
-  t: TFunction
-): string | null => {
+const formatTimeRemaining = (value: unknown, t: TFunction): string | null => {
   const date = normalizeDate(value);
   if (!date) return null;
   const remainingMs = date.getTime() - Date.now();
@@ -162,6 +165,15 @@ const getQuotaError = (quota: DetailQuotaState): string => {
   return quota.error || '';
 };
 
+const getQuotaConfig = (provider: string) => {
+  if (provider === 'antigravity') return ANTIGRAVITY_CONFIG;
+  if (provider === 'claude') return CLAUDE_CONFIG;
+  if (provider === 'codex') return CODEX_CONFIG;
+  if (provider === 'gemini-cli') return GEMINI_CLI_CONFIG;
+  if (provider === 'kimi') return KIMI_CONFIG;
+  return null;
+};
+
 const buildDiagnosis = (
   file: AuthFileItem,
   statusMessage: string,
@@ -219,11 +231,7 @@ const buildDiagnosis = (
   };
 };
 
-const getQuotaLines = (
-  provider: string,
-  quota: DetailQuotaState,
-  t: TFunction
-): QuotaLine[] => {
+const getQuotaLines = (provider: string, quota: DetailQuotaState, t: TFunction): QuotaLine[] => {
   if (!quota || quota.status !== 'success') return [];
 
   if (provider === 'codex') {
@@ -327,33 +335,26 @@ export function AuthFileDetailsModal(props: AuthFileDetailsModalProps) {
     return null;
   }) as DetailQuotaState;
 
-  const cachedCodexQuota = useMemo(
-    () =>
-      file && resolveAuthProvider(file) === 'codex'
-        ? ((CODEX_CONFIG.getCachedState?.(file, t) as CodexQuotaState | null) ?? null)
-        : null,
-    [file, t]
-  );
+  const cachedQuota = useMemo(() => {
+    if (!file) return null;
+    const config = getQuotaConfig(resolveAuthProvider(file));
+    return (config?.getCachedState?.(file, t) as DetailQuotaState) ?? null;
+  }, [file, t]);
 
   if (!file) {
-    return (
-      <Modal
-        open={false}
-        onClose={onClose}
-        title={t('auth_files.details_title')}
-      />
-    );
+    return <Modal open={false} onClose={onClose} title={t('auth_files.details_title')} />;
   }
 
   const provider = resolveAuthProvider(file);
-  const quota = liveQuota ?? cachedCodexQuota;
+  const quota = cachedQuota ?? liveQuota;
   const quotaLines = getQuotaLines(provider, quota, t);
   const recentBuckets = normalizeRecentRequestBuckets(file.recent_requests ?? file.recentRequests);
   const statusData = statusBarDataFromRecentRequests(recentBuckets);
   const successCount = normalizeUsageTotal(file.success);
   const failureCount = normalizeUsageTotal(file.failed);
   const requestTotal = successCount + failureCount;
-  const successRate = requestTotal > 0 ? `${((successCount / requestTotal) * 100).toFixed(1)}%` : '-';
+  const successRate =
+    requestTotal > 0 ? `${((successCount / requestTotal) * 100).toFixed(1)}%` : '-';
   const statusMessage = getAuthFileStatusMessage(file);
   const displayStatusMessage = getStatusDisplayMessage(statusMessage);
   const diagnosis = buildDiagnosis(file, statusMessage, quota, t);
@@ -362,7 +363,10 @@ export function AuthFileDetailsModal(props: AuthFileDetailsModalProps) {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const priorityValue = parsePriorityValue(file.priority ?? file['priority']);
   const noteValue = typeof file.note === 'string' ? file.note.trim() : '';
-  const codexPlan = provider === 'codex' ? (quota as CodexQuotaState | null)?.planType ?? resolveCodexPlanType(file) : null;
+  const codexPlan =
+    provider === 'codex'
+      ? ((quota as CodexQuotaState | null)?.planType ?? resolveCodexPlanType(file))
+      : null;
   const subscriptionUntil =
     provider === 'codex' ? (quota as CodexQuotaState | null)?.subscriptionActiveUntil : null;
   const subscriptionRemaining = formatTimeRemaining(subscriptionUntil, t);
@@ -379,19 +383,48 @@ export function AuthFileDetailsModal(props: AuthFileDetailsModalProps) {
 
   const overviewRows: DetailRow[] = [
     { label: t('auth_files.details_provider'), value: typeLabel },
-    { label: t('auth_files.details_state'), value: file.disabled ? t('auth_files.health_status_disabled') : t('auth_files.details_enabled') },
-    { label: t('auth_files.details_runtime'), value: isRuntimeOnly ? t('common.yes') : t('common.no') },
-    { label: t('auth_files.details_credential_id'), value: rawAuthIndex == null ? '-' : String(rawAuthIndex) },
-    { label: t('auth_files.file_size'), value: formatFileSize(normalizeNumberValue(file.size) ?? 0) },
+    {
+      label: t('auth_files.details_state'),
+      value: file.disabled
+        ? t('auth_files.health_status_disabled')
+        : t('auth_files.details_enabled'),
+    },
+    {
+      label: t('auth_files.details_runtime'),
+      value: isRuntimeOnly ? t('common.yes') : t('common.no'),
+    },
+    {
+      label: t('auth_files.details_credential_id'),
+      value: rawAuthIndex == null ? '-' : String(rawAuthIndex),
+    },
+    {
+      label: t('auth_files.file_size'),
+      value: formatFileSize(normalizeNumberValue(file.size) ?? 0),
+    },
     { label: t('auth_files.file_modified'), value: formatModified(file) },
-    { label: t('auth_files.priority_display'), value: priorityValue ?? '-', hidden: priorityValue === undefined },
+    {
+      label: t('auth_files.priority_display'),
+      value: priorityValue ?? '-',
+      hidden: priorityValue === undefined,
+    },
     { label: t('auth_files.note_display'), value: noteValue, hidden: !noteValue },
   ];
 
   const identityRows: DetailRow[] = [
-    { label: t('auth_files.details_account'), value: typeof file.account === 'string' ? file.account : '-' },
-    { label: t('auth_files.details_codex_account_id'), value: codexAccountId ?? '-', hidden: provider !== 'codex' },
-    { label: t('auth_files.details_gemini_project_id'), value: geminiProjectId ?? '-', hidden: provider !== 'gemini-cli' },
+    {
+      label: t('auth_files.details_account'),
+      value: typeof file.account === 'string' ? file.account : '-',
+    },
+    {
+      label: t('auth_files.details_codex_account_id'),
+      value: codexAccountId ?? '-',
+      hidden: provider !== 'codex',
+    },
+    {
+      label: t('auth_files.details_gemini_project_id'),
+      value: geminiProjectId ?? '-',
+      hidden: provider !== 'gemini-cli',
+    },
     { label: t('auth_files.details_last_refresh'), value: formatDateTime(file.lastRefresh) },
   ];
 
@@ -474,7 +507,10 @@ export function AuthFileDetailsModal(props: AuthFileDetailsModalProps) {
           </div>
           {provider === 'codex' && (
             <div className={styles.detailQuotaMeta}>
-              <DetailField label={t('codex_quota.plan_label')} value={formatPlanLabel(codexPlan, t)} />
+              <DetailField
+                label={t('codex_quota.plan_label')}
+                value={formatPlanLabel(codexPlan, t)}
+              />
               <DetailField
                 label={t('codex_quota.subscription_label')}
                 value={
@@ -498,7 +534,11 @@ export function AuthFileDetailsModal(props: AuthFileDetailsModalProps) {
                       {line.reset ? ` · ${line.reset}` : ''}
                     </span>
                   </div>
-                  <QuotaProgressBar percent={line.percent} highThreshold={70} mediumThreshold={30} />
+                  <QuotaProgressBar
+                    percent={line.percent}
+                    highThreshold={70}
+                    mediumThreshold={30}
+                  />
                 </div>
               ))}
             </div>

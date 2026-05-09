@@ -25,7 +25,7 @@
 - HTTP/TLS serving, Redis RESP usage queue access, optional pprof serving, request logging, log retention, streaming keep-alives, streaming bootstrap retries, and filtered upstream header passthrough.
 - Token/config persistence through local files, Postgres, git, or S3-compatible object storage with local mirrors.
 - Built-in management panel source, single-file panel build, and embedded `/management.html` serving.
-- Codex quota snapshots for the management panel, including server-side refresh, per-auth plan grouping data, and subscription expiry derived from Codex ID-token claims.
+- OAuth quota snapshots for the management panel, including server-side refresh, per-auth quota grouping data, and Codex subscription expiry derived from ID-token claims.
 - Runtime auth manager integration, credential selection, retry/cooldown behavior, session affinity, model registration, and provider executor binding.
 - Provider executors for Gemini, Vertex, Gemini CLI, AI Studio relay, Antigravity, Claude, Codex HTTP/WebSocket, Kimi, and OpenAI-compatible providers.
 - Protocol translation registration and request/response conversion between OpenAI, Gemini, Claude, Codex, and related formats.
@@ -69,7 +69,7 @@
 - `/v0/management/api-key-usage` returns in-memory API-key auth success/failure totals and 20 recent 10-minute request buckets grouped by provider and `base_url|api_key`.
 - `/v0/management/usage`, `/v0/management/usage/export`, and `/v0/management/usage/import` expose the persistent aggregated usage snapshot for the built-in management panel.
 - `/v0/management/usage-queue?count=N` pops JSON usage records from the same in-memory queue exposed through the Redis RESP interface.
-- `/v0/management/codex-quota/refresh` refreshes Codex quota snapshots for selected or all Codex OAuth auth files through CPA-managed access-token refresh and the ChatGPT `wham/usage` endpoint.
+- `/v0/management/quota/refresh` refreshes quota snapshots for selected or all supported OAuth auth files through CPA-managed token handling; `/codex-quota/refresh` remains a legacy alias.
 - `/v1/ws` is the WebSocket relay path attached by `Server.AttachWebsocketRoute`; it creates runtime-only `aistudio-*` providers through `internal/wsrelay`.
 - Amp routes live in `internal/api/modules/amp` and include `/api/provider/:provider/...`, `/api/provider/google/v1beta1/*path`, `/api/{internal,user,auth,meta,ads,telemetry,threads,otel,tab}` proxy routes, and root web routes such as `/threads`, `/docs`, `/settings`, `/auth`, and RSS endpoints.
 - Redis RESP usage queue access accepts `AUTH` with the management key and supports destructive `LPOP`/`RPOP` from the in-memory usage queue. Unauthenticated Redis commands return `NOAUTH`; management-disabled servers reject Redis protocol handling.
@@ -91,10 +91,10 @@
 - Watcher monitors the selected config path and auth directory. Config reload uses debounce and hash checks; auth reload handles same-directory `.json` files.
 - Watcher auth updates flow through `WithSkipPersist()` to avoid writing the same file event back into storage.
 - Store implementations that expose `PersistConfig()` or `PersistAuthFiles()` are used by watcher/management changes to push local mirror updates to the remote backend.
-- `sdk/cliproxy.Service.Run` wires usage collection for CLI and SDK entrypoints. `internal/usage` aggregates records, including per-request failed-attempt error messages, into an in-process snapshot, loads and flushes `usage/usage.json`, and writes the same snapshot to S3-compatible object storage at `usage/usage.json` when `OBJECTSTORE_ENDPOINT` is selected.
+- `sdk/cliproxy.Service.Run` wires usage collection for CLI and SDK entrypoints. `internal/usage` aggregates records, including per-request failed-attempt error messages, into an in-process snapshot, loads `usage/usage.json`, flushes dirty snapshots every 15 minutes plus explicit import/shutdown flushes, and writes the same snapshot to S3-compatible object storage at `usage/usage.json` when `OBJECTSTORE_ENDPOINT` is selected.
 - Local Docker Compose maps `./usage` to `/CLIProxyAPI/usage`, matching the config/auth/log volume pattern so file-mode usage snapshots survive container recreation.
 - Object-store usage snapshot restore compares `saved_at` with file/object modified times and keeps the newer local mirror when S3 still has an older snapshot; transient S3 read failures fall back to the local mirror when it is readable.
-- Codex quota refresh stores the latest per-auth snapshot under auth metadata key `codex_quota`; this follows the existing auth-file/store persistence path instead of introducing a separate quota database.
+- Management quota refresh stores the latest per-auth snapshot under auth metadata key `quota` for supported providers including Codex, Claude, Antigravity, Gemini CLI, and Kimi; this follows the existing auth-file/store persistence path instead of introducing a separate quota database.
 - Redis usage queue stores JSON records in process memory under `internal/redisqueue`; `redis-usage-queue-retention-seconds` controls retention with default `60` and max `3600`. Disabling management clears the queue, and `usage-statistics-enabled` gates both persistent usage aggregation and Redis queue enqueuing.
 - `sdk/cliproxy/auth.Auth` keeps per-auth `Success`, `Failed`, and recent-request bucket counters in memory. These counters are preserved across runtime auth updates but are not serialized to auth JSON.
 
@@ -103,8 +103,8 @@
 - TLS is controlled by `tls.enable`, `tls.cert`, and `tls.key`; the main server creates a shared TCP listener, wraps it with `tls.NewListener` when TLS is enabled, and serves HTTP through the mux listener.
 - pprof is a separate optional HTTP server controlled by `pprof.enable` and `pprof.addr`, defaulting to `127.0.0.1:8316`, and is re-applied on hot reload.
 - Management panel serving prefers the embedded single-file asset. `MANAGEMENT_STATIC_PATH` is only a local debug override when its resolved `management.html` exists; the external auto-updater runs only when the binary has no embedded panel.
-- Management Codex quota refresh starts only while management routes are enabled, stops with server shutdown or management disablement, runs every 10 minutes with concurrency 5, and exposes cached snapshots through `/auth-files`; the credential center hydrates newer snapshots from the file list.
-- The management credential center is implemented by the `/auth-files` route; `/quota` redirects there. It renders all credentials grouped by provider in the all view, groups Codex credentials by plan inside Codex views, and can sort within groups by name, priority, or remaining quota.
+- Management quota refresh starts only while management routes are enabled, stops with server shutdown or management disablement, runs every 5 minutes with concurrency 5, and exposes cached snapshots through `/auth-files`.
+- The management credential center is implemented by the `/auth-files` route; `/quota` redirects there. It renders all credentials grouped by provider in the all view, groups Codex credentials by plan inside Codex views, can sort within groups by name, priority, or remaining quota, and silently refreshes auth file health plus persisted quota snapshots every 5 seconds while open.
 - Log output uses stdout by default or rotating `main.log` when `logging-to-file` is enabled. Log directory resolution prefers `<WRITABLE_PATH>/logs`, then writable `./logs`, then `<auth-dir>/logs`.
 - `request-log` controls detailed request logging except in `commercial-mode`, which skips high-overhead request logging middleware.
 - Gin request logging appends `[credits]` when executor context marks an Antigravity request as using Google One AI credits.
