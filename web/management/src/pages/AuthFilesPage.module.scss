@@ -2183,6 +2183,108 @@
   padding-top: 2px;
 }
 
+.credentialEvents {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.credentialEventsSummary,
+.credentialEventsLimit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px $spacing-md;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.credentialEventsLimit {
+  color: var(--warning-color);
+}
+
+.credentialEventsTableWrapper {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+}
+
+.credentialEventsTable {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: collapse;
+  color: var(--text-primary);
+  font-size: 12px;
+
+  th,
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-secondary);
+    color: var(--text-tertiary);
+    font-weight: 700;
+  }
+
+  tr:last-child td {
+    border-bottom: 0;
+  }
+}
+
+.credentialEventsResultSuccess,
+.credentialEventsResultFailed,
+.credentialEventsThinkingBadge,
+.credentialEventsThinkingEmpty {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.credentialEventsResultSuccess {
+  border: 1px solid var(--success-color);
+  color: var(--success-color);
+  background: var(--success-badge-bg);
+}
+
+.credentialEventsResultFailed {
+  border: 1px solid var(--danger-color);
+  color: var(--danger-color);
+  background: var(--bg-error-light);
+}
+
+.credentialEventsThinkingBadge,
+.credentialEventsThinkingEmpty {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.credentialEventsThinkingEmpty {
+  color: var(--text-tertiary);
+}
+
+.credentialEventsTable .credentialEventsError {
+  min-width: 320px;
+  max-width: 460px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--danger-color);
+  line-height: 1.45;
+}
+
 .detailMessage {
   width: 100%;
   margin: $spacing-sm 0 0;

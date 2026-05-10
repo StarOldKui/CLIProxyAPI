@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type PropsWithChildren,
+  type MouseEvent,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -145,14 +146,14 @@ export function Modal({
   const startClose = useCallback(
     (notifyParent: boolean) => {
       if (closeTimerRef.current !== null) return;
+      if (notifyParent) {
+        onClose();
+      }
       setIsClosing(true);
       closeTimerRef.current = window.setTimeout(() => {
         setIsVisible(false);
         setIsClosing(false);
         closeTimerRef.current = null;
-        if (notifyParent) {
-          onClose();
-        }
       }, CLOSE_ANIMATION_DURATION);
     },
     [onClose]
@@ -186,6 +187,24 @@ export function Modal({
   const handleClose = useCallback(() => {
     startClose(true);
   }, [startClose]);
+
+  const handleOverlayMouseDown = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      if (closeDisabled || event.button !== 0 || event.target !== event.currentTarget) return;
+      event.preventDefault();
+      handleClose();
+    },
+    [closeDisabled, handleClose]
+  );
+
+  const handleCloseButtonClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      if (closeDisabled) return;
+      handleClose();
+    },
+    [closeDisabled, handleClose]
+  );
 
   useEffect(() => {
     return () => {
@@ -273,7 +292,7 @@ export function Modal({
   const modalClass = `modal ${isClosing ? 'modal-closing' : 'modal-entering'}${className ? ` ${className}` : ''}`;
 
   const modalContent = (
-    <div className={overlayClass}>
+    <div className={overlayClass} onMouseDown={handleOverlayMouseDown}>
       <div
         ref={modalRef}
         className={modalClass}
@@ -287,7 +306,7 @@ export function Modal({
           ref={closeButtonRef}
           type="button"
           className="modal-close-floating"
-          onClick={closeDisabled ? undefined : handleClose}
+          onClick={handleCloseButtonClick}
           aria-label={t('common.close')}
           disabled={closeDisabled}
         >

@@ -15,6 +15,7 @@ import {
   extractLatencyMs,
   extractTotalTokens,
   formatDurationMs,
+  formatUsageThinkingLabel,
   LATENCY_SOURCE_FIELD,
   normalizeAuthIndex,
   type UsageThinking,
@@ -62,37 +63,6 @@ const toNumber = (value: unknown): number => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return parsed;
-};
-
-const normalizeThinkingText = (value: unknown): string => {
-  if (typeof value !== 'string') return '';
-  return value.trim();
-};
-
-const formatThinkingLabel = (thinking: UsageThinking | null): string => {
-  if (!thinking) return '-';
-
-  const intensity = normalizeThinkingText(thinking.intensity);
-  const level = normalizeThinkingText(thinking.level);
-  const mode = normalizeThinkingText(thinking.mode);
-  const budget =
-    typeof thinking.budget === 'number' && Number.isFinite(thinking.budget)
-      ? thinking.budget
-      : null;
-  const label = intensity || level || (budget !== null ? String(budget) : mode);
-  const budgetLabel = budget !== null ? budget.toLocaleString() : null;
-
-  if (!label) return '-';
-  if (budgetLabel !== null && label === String(budget)) {
-    return budgetLabel;
-  }
-  if (mode === 'budget' && budget !== null && budget > 0) {
-    return `${label} (${budgetLabel})`;
-  }
-  if (budget === -1 && label !== 'auto') {
-    return `${label} (-1)`;
-  }
-  return label;
 };
 
 const encodeCsv = (value: string | number): string => {
@@ -193,7 +163,7 @@ export function RequestEventsDetailsCard({
       );
       const latencyMs = extractLatencyMs(detail);
       const thinking = detail.thinking ?? null;
-      const thinkingLabel = formatThinkingLabel(thinking);
+      const thinkingLabel = formatUsageThinkingLabel(thinking);
       const errorMessage = typeof detail.error_message === 'string' ? detail.error_message.trim() : '';
 
       return {

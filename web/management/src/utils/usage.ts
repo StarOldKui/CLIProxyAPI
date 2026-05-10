@@ -154,6 +154,31 @@ const normalizeUsageThinking = (value: unknown): UsageThinking | null => {
   };
 };
 
+const normalizeUsageThinkingText = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+};
+
+export const formatUsageThinkingLabel = (thinking: UsageThinking | null): string => {
+  if (!thinking) return '-';
+
+  const intensity = normalizeUsageThinkingText(thinking.intensity);
+  const level = normalizeUsageThinkingText(thinking.level);
+  const mode = normalizeUsageThinkingText(thinking.mode);
+  const budget =
+    typeof thinking.budget === 'number' && Number.isFinite(thinking.budget)
+      ? thinking.budget
+      : null;
+  const label = intensity || level || (budget !== null ? String(budget) : mode);
+  const budgetLabel = budget !== null ? budget.toLocaleString() : null;
+
+  if (!label) return '-';
+  if (budgetLabel !== null && label === String(budget)) return budgetLabel;
+  if (mode === 'budget' && budget !== null && budget > 0) return `${label} (${budgetLabel})`;
+  if (budget === -1 && label !== 'auto') return `${label} (-1)`;
+  return label;
+};
+
 interface UsageSummary {
   totalRequests: number;
   successCount: number;

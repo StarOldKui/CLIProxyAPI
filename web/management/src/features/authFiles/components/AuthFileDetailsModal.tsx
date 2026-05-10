@@ -42,6 +42,7 @@ import {
   parsePriorityValue,
 } from '@/features/authFiles/constants';
 import { QuotaProgressBar } from '@/features/authFiles/components/QuotaProgressBar';
+import { CredentialRequestEventsTable } from '@/features/authFiles/components/CredentialRequestEventsTable';
 import styles from '@/pages/AuthFilesPage.module.scss';
 
 export type AuthFileDetailsModalProps = {
@@ -552,6 +553,14 @@ export function AuthFileDetailsModal(props: AuthFileDetailsModalProps) {
           <div className={styles.detailStatusBar}>
             <ProviderStatusBar statusData={statusData} styles={styles} />
           </div>
+        </section>
+
+        <section className={styles.detailPanel}>
+          <div className={styles.detailSectionHeader}>
+            <h4>{t('auth_files.details_events_title')}</h4>
+            <span>{t('auth_files.details_events_scope')}</span>
+          </div>
+          <CredentialRequestEventsTable file={file} />
         </section>
 
         <section className={`${styles.detailPanel} ${diagnosisClass}`}>
