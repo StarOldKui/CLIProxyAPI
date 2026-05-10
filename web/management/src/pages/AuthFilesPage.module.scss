@@ -733,6 +733,10 @@
 }
 
 .quotaMessage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
   font-size: 12px;
   color: var(--text-tertiary);
   text-align: center;
@@ -744,6 +748,7 @@
   border: none;
   background: none;
   cursor: pointer;
+  font: inherit;
   text-decoration: underline;
 
   &:hover:not(:disabled) {

@@ -60,6 +60,13 @@ type quotaSnapshot struct {
 	SupplementaryBody       string `json:"supplementary_body,omitempty"`
 }
 
+type quotaRefreshStatus struct {
+	LastCompletedAt string `json:"last_completed_at,omitempty"`
+	NextRunAt       string `json:"next_run_at,omitempty"`
+	Success         int    `json:"success"`
+	Failed          int    `json:"failed"`
+}
+
 func (h *Handler) StartQuotaAutoRefresh() {
 	if h == nil {
 		return
@@ -137,11 +144,15 @@ func (h *Handler) refreshAllQuotaInBackground(ctx context.Context) {
 	}()
 
 	auths := h.quotaTargets(nil, true)
-	if len(auths) == 0 {
+	results := map[string]quotaSnapshot{}
+	if len(auths) > 0 {
+		log.Debugf("management quota auto refresh targets: %d", len(auths))
+		results = h.refreshQuotaBatch(ctx, auths)
+	}
+	if ctx.Err() != nil {
 		return
 	}
-	log.Debugf("management quota auto refresh targets: %d", len(auths))
-	h.refreshQuotaBatch(ctx, auths)
+	h.updateQuotaRefreshStatus(time.Now(), results)
 }
 
 func (h *Handler) RefreshQuota(c *gin.Context) {
@@ -158,6 +169,45 @@ func (h *Handler) RefreshQuota(c *gin.Context) {
 
 func (h *Handler) RefreshCodexQuota(c *gin.Context) {
 	h.RefreshQuota(c)
+}
+
+func (h *Handler) quotaRefreshStatusSnapshot() quotaRefreshStatus {
+	if h == nil {
+		return quotaRefreshStatus{}
+	}
+	h.codexQuotaAutoMu.Lock()
+	defer h.codexQuotaAutoMu.Unlock()
+	return h.quotaRefreshStatus
+}
+
+func (h *Handler) updateQuotaRefreshStatus(completedAt time.Time, results map[string]quotaSnapshot) {
+	if h == nil {
+		return
+	}
+	success, failed := quotaRefreshResultCounts(results)
+	completedAt = completedAt.UTC()
+	h.codexQuotaAutoMu.Lock()
+	h.quotaRefreshStatus = quotaRefreshStatus{
+		LastCompletedAt: completedAt.Format(time.RFC3339),
+		NextRunAt:       completedAt.Add(quotaRefreshInterval).Format(time.RFC3339),
+		Success:         success,
+		Failed:          failed,
+	}
+	h.codexQuotaAutoMu.Unlock()
+}
+
+func quotaRefreshResultCounts(results map[string]quotaSnapshot) (int, int) {
+	success := 0
+	failed := 0
+	for _, snapshot := range results {
+		switch snapshot.Status {
+		case "success":
+			success++
+		case "error":
+			failed++
+		}
+	}
+	return success, failed
 }
 
 func (h *Handler) quotaTargets(names []string, all bool) []*coreauth.Auth {

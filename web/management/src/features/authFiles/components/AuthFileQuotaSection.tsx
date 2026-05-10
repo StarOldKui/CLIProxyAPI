@@ -28,10 +28,11 @@ export type AuthFileQuotaSectionProps = {
   file: AuthFileItem;
   quotaType: QuotaProviderType;
   disableControls: boolean;
+  onRefreshQuota: (file: AuthFileItem) => void;
 };
 
 export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
-  const { file, quotaType } = props;
+  const { disableControls, file, onRefreshQuota, quotaType } = props;
   const { t } = useTranslation();
 
   const quota = useQuotaStore((state) => {
@@ -50,10 +51,21 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
 
   const displayedQuota = (config.getCachedState?.(file, t) as QuotaState) ?? quota;
   const quotaStatus = displayedQuota?.status ?? 'idle';
+  const canRefresh = !disableControls && file.disabled !== true && quotaStatus !== 'loading';
   const quotaErrorMessage = resolveQuotaErrorMessage(
     t,
     displayedQuota?.errorStatus,
     displayedQuota?.error || t('common.unknown_error')
+  );
+  const renderIdleMessage = () => (
+    <button
+      type="button"
+      className={`${styles.quotaMessage} ${styles.quotaMessageAction}`}
+      onClick={() => onRefreshQuota(file)}
+      disabled={!canRefresh}
+    >
+      {t(`${config.i18nPrefix}.idle`)}
+    </button>
   );
 
   return (
@@ -61,7 +73,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
       {quotaStatus === 'loading' ? (
         <div className={styles.quotaMessage}>{t(`${config.i18nPrefix}.loading`)}</div>
       ) : quotaStatus === 'idle' ? (
-        <div className={styles.quotaMessage}>{t(`${config.i18nPrefix}.idle`)}</div>
+        renderIdleMessage()
       ) : quotaStatus === 'error' ? (
         <div className={styles.quotaError}>
           {t(`${config.i18nPrefix}.load_failed`, {
@@ -71,7 +83,7 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
       ) : displayedQuota ? (
         (config.renderQuotaItems(displayedQuota, t, { styles, QuotaProgressBar }) as ReactNode)
       ) : (
-        <div className={styles.quotaMessage}>{t(`${config.i18nPrefix}.idle`)}</div>
+        renderIdleMessage()
       )}
     </div>
   );

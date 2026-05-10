@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { authFilesApi } from '@/services/api';
 import { apiClient } from '@/services/api/client';
 import { useNotificationStore } from '@/stores';
-import type { AuthFileItem } from '@/types';
+import type { AuthFileItem, QuotaRefreshStatus } from '@/types';
 import { formatFileSize } from '@/utils/format';
 import { MAX_AUTH_FILE_SIZE } from '@/utils/constants';
 import { downloadBlob } from '@/utils/download';
@@ -25,6 +25,7 @@ type DeleteAllOptions = {
 
 export type UseAuthFilesDataResult = {
   files: AuthFileItem[];
+  quotaRefreshStatus: QuotaRefreshStatus | null;
   selectedFiles: Set<string>;
   selectionCount: number;
   loading: boolean;
@@ -57,6 +58,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
   const { showNotification, showConfirmation } = useNotificationStore();
 
   const [files, setFiles] = useState<AuthFileItem[]>([]);
+  const [quotaRefreshStatus, setQuotaRefreshStatus] = useState<QuotaRefreshStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -70,6 +72,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const batchStatusPendingRef = useRef(false);
   const loadedRef = useRef(false);
+  const loadInFlightRef = useRef(false);
   const requestIdRef = useRef(0);
   const selectionCount = selectedFiles.size;
   const toggleSelect = useCallback((name: string) => {
@@ -165,8 +168,11 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
 
   const loadFiles = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
+    if (silent && loadInFlightRef.current) return;
+
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
+    loadInFlightRef.current = true;
     const isInitialLoad = !loadedRef.current;
     if (isInitialLoad) {
       setLoading(true);
@@ -179,17 +185,23 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
       const data = await authFilesApi.list();
       if (requestId !== requestIdRef.current) return;
       setFiles(data?.files || []);
+      setQuotaRefreshStatus(data?.quota_refresh || null);
       loadedRef.current = true;
     } catch (err: unknown) {
       if (requestId !== requestIdRef.current) return;
-      const errorMessage = err instanceof Error ? err.message : t('notification.refresh_failed');
-      if (!silent) {
-        setError(errorMessage);
+      if (silent) {
+        setQuotaRefreshStatus((current) =>
+          current ? { ...current, next_run_at: undefined } : current
+        );
+        return;
       }
+      const errorMessage = err instanceof Error ? err.message : t('notification.refresh_failed');
+      setError(errorMessage);
     } finally {
       if (requestId === requestIdRef.current) {
         setLoading(false);
         setRefreshing(false);
+        loadInFlightRef.current = false;
       }
     }
   }, [t]);
@@ -659,6 +671,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
 
   return {
     files,
+    quotaRefreshStatus,
     selectedFiles,
     selectionCount,
     loading,

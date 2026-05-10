@@ -1,6 +1,6 @@
 /**
- * 认证文件相关类型
- * 基于原项目 src/modules/auth-files.js
+ * Auth file related types.
+ * Based on the original src/modules/auth-files.js module.
  */
 
 import type { RecentRequestBucket } from '@/utils/recentRequests';
@@ -39,7 +39,15 @@ export interface AuthFileItem {
   [key: string]: unknown;
 }
 
+export interface QuotaRefreshStatus {
+  last_completed_at?: string;
+  next_run_at?: string;
+  success?: number;
+  failed?: number;
+}
+
 export interface AuthFilesResponse {
   files: AuthFileItem[];
   total?: number;
+  quota_refresh?: QuotaRefreshStatus;
 }

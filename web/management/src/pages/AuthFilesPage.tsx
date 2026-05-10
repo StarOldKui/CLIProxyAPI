@@ -70,7 +70,12 @@ import {
   quotaSnapshotFromFile,
 } from '@/components/quota';
 import { useAuthStore, useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
-import { normalizePlanType, resolveAuthProvider, resolveCodexPlanType } from '@/utils/quota';
+import {
+  getStatusFromError,
+  normalizePlanType,
+  resolveAuthProvider,
+  resolveCodexPlanType,
+} from '@/utils/quota';
 import styles from './AuthFilesPage.module.scss';
 
 const easePower3Out = (progress: number) => 1 - (1 - progress) ** 4;
@@ -80,11 +85,21 @@ const BATCH_BAR_HIDDEN_TRANSFORM = 'translateX(-50%) translateY(56px)';
 const DEFAULT_REGULAR_PAGE_SIZE = 9;
 const DEFAULT_COMPACT_PAGE_SIZE = 12;
 const AUTH_FILES_STATUS_REFRESH_INTERVAL_MS = 5_000;
-const QUOTA_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 type AuthQuotaState = { status?: string; error?: string; errorStatus?: number } | undefined;
+type AuthQuotaValue = NonNullable<AuthQuotaState>;
 
 type AuthQuotaMaps = Record<QuotaProviderType, Record<string, AuthQuotaState>>;
+type AuthQuotaSetter = (
+  updater: (prev: Record<string, AuthQuotaValue>) => Record<string, AuthQuotaValue>
+) => void;
+
+type AuthQuotaConfig = {
+  fetchQuota: (file: AuthFileItem, t: ReturnType<typeof useTranslation>['t']) => Promise<unknown>;
+  buildLoadingState: () => AuthQuotaValue;
+  buildSuccessState: (data: unknown) => AuthQuotaValue;
+  buildErrorState: (message: string, status?: number) => AuthQuotaValue;
+};
 
 type QuotaRefreshSummary = {
   failed: number;
@@ -160,7 +175,7 @@ const hasAuthFileQuotaProblem = (
   return hasAuthFileQuotaSnapshotProblem(file);
 };
 
-const parseQuotaUpdatedAt = (value?: string | null): number | null => {
+const parseStatusTimestamp = (value?: string | null): number | null => {
   if (!value) return null;
   const time = Date.parse(value);
   return Number.isNaN(time) ? null : time;
@@ -328,6 +343,15 @@ export function AuthFilesPage() {
     (state) => state.geminiCliQuota as Record<string, AuthQuotaState>
   );
   const kimiQuota = useQuotaStore((state) => state.kimiQuota as Record<string, AuthQuotaState>);
+  const setAntigravityQuota = useQuotaStore(
+    (state) => state.setAntigravityQuota
+  ) as unknown as AuthQuotaSetter;
+  const setClaudeQuota = useQuotaStore((state) => state.setClaudeQuota) as unknown as AuthQuotaSetter;
+  const setCodexQuota = useQuotaStore((state) => state.setCodexQuota) as unknown as AuthQuotaSetter;
+  const setGeminiCliQuota = useQuotaStore(
+    (state) => state.setGeminiCliQuota
+  ) as unknown as AuthQuotaSetter;
+  const setKimiQuota = useQuotaStore((state) => state.setKimiQuota) as unknown as AuthQuotaSetter;
   const pageTransitionLayer = usePageTransitionLayer();
   const isCurrentLayer = pageTransitionLayer ? pageTransitionLayer.status === 'current' : true;
   const navigate = useNavigate();
@@ -357,6 +381,7 @@ export function AuthFilesPage() {
 
   const {
     files,
+    quotaRefreshStatus,
     selectedFiles,
     selectionCount,
     loading,
@@ -444,6 +469,16 @@ export function AuthFilesPage() {
       kimi: kimiQuota,
     }),
     [antigravityQuota, claudeQuota, codexQuota, geminiCliQuota, kimiQuota]
+  );
+  const quotaSetters = useMemo<Record<QuotaProviderType, AuthQuotaSetter>>(
+    () => ({
+      antigravity: setAntigravityQuota,
+      claude: setClaudeQuota,
+      codex: setCodexQuota,
+      'gemini-cli': setGeminiCliQuota,
+      kimi: setKimiQuota,
+    }),
+    [setAntigravityQuota, setClaudeQuota, setCodexQuota, setGeminiCliQuota, setKimiQuota]
   );
   const pageSize = compactMode ? pageSizeByMode.compact : pageSizeByMode.regular;
   const isAllGroupedView = filter === 'all';
@@ -665,36 +700,22 @@ export function AuthFilesPage() {
   }, [filesMatchingStatusFilters]);
 
   const quotaRefreshSummary = useMemo<QuotaRefreshSummary>(() => {
-    let lastRefreshAt: number | null = null;
-    let success = 0;
-    let failed = 0;
-
-    files.forEach((file) => {
-      const provider = resolveAuthProvider(file);
-      if (!QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType)) return;
-
-      const snapshot = quotaSnapshotFromFile(file);
-      if (!snapshot) return;
-
-      if (snapshot.status === 'success') {
-        success += 1;
-      } else if (snapshot.status === 'error') {
-        failed += 1;
-      }
-
-      const refreshedAt = parseQuotaUpdatedAt(snapshot.updated_at);
-      if (refreshedAt !== null && (lastRefreshAt === null || refreshedAt > lastRefreshAt)) {
-        lastRefreshAt = refreshedAt;
-      }
-    });
-
+    const lastRefreshAt = parseStatusTimestamp(quotaRefreshStatus?.last_completed_at);
+    const nextRefreshAt =
+      lastRefreshAt === null ? null : parseStatusTimestamp(quotaRefreshStatus?.next_run_at);
     return {
-      failed,
+      failed: quotaRefreshStatus?.failed ?? 0,
       lastRefreshAt,
-      nextRefreshAt: lastRefreshAt === null ? null : lastRefreshAt + QUOTA_REFRESH_INTERVAL_MS,
-      success,
+      nextRefreshAt,
+      success: quotaRefreshStatus?.success ?? 0,
     };
-  }, [files]);
+  }, [quotaRefreshStatus]);
+
+  useEffect(() => {
+    if (quotaRefreshSummary.nextRefreshAt !== null) {
+      setQuotaRefreshNowMs(Date.now());
+    }
+  }, [quotaRefreshSummary.nextRefreshAt]);
 
   useInterval(
     () => {
@@ -839,6 +860,50 @@ export function AuthFilesPage() {
       );
     },
     [showNotification, t]
+  );
+
+  const handleRefreshQuotaForFile = useCallback(
+    async (file: AuthFileItem) => {
+      const provider = resolveAuthProvider(file);
+      if (!QUOTA_PROVIDER_TYPES.has(provider as QuotaProviderType)) return;
+      if (disableControls || file.disabled) return;
+
+      const quotaType = provider as QuotaProviderType;
+      const config = getQuotaConfig(provider) as AuthQuotaConfig | null;
+      const setQuota = quotaSetters[quotaType];
+      if (!config || !setQuota) return;
+
+      const currentQuota = getQuotaStateForAuthFile(file, quotaMaps, t);
+      if (currentQuota?.status === 'loading') return;
+
+      setQuota((prev) => ({
+        ...prev,
+        [file.name]: config.buildLoadingState(),
+      }));
+
+      try {
+        const data = await config.fetchQuota(file, t);
+        setQuota((prev) => ({
+          ...prev,
+          [file.name]: config.buildSuccessState(data),
+        }));
+        showNotification(t('auth_files.quota_refresh_success', { name: file.name }), 'success');
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : t('common.unknown_error');
+        const status = getStatusFromError(err);
+        setQuota((prev) => ({
+          ...prev,
+          [file.name]: config.buildErrorState(message, status),
+        }));
+        showNotification(
+          t('auth_files.quota_refresh_failed', { name: file.name, message }),
+          'error'
+        );
+      } finally {
+        void loadFiles({ silent: true }).catch(() => {});
+      }
+    },
+    [disableControls, loadFiles, quotaMaps, quotaSetters, showNotification, t]
   );
 
   const openExcludedEditor = useCallback(
@@ -1043,6 +1108,7 @@ export function AuthFilesPage() {
       onShowDetails={setDetailsFile}
       onDownload={handleDownload}
       onOpenPrefixProxyEditor={openPrefixProxyEditor}
+      onRefreshQuota={handleRefreshQuotaForFile}
       onDelete={handleDelete}
       onToggleStatus={handleStatusToggle}
       onToggleSelect={toggleSelect}
@@ -1138,8 +1204,11 @@ export function AuthFilesPage() {
             <div className={styles.quotaRefreshTile}>
               <span>{t('auth_files.quota_refresh_result')}</span>
               <strong>
-                {quotaRefreshSummary.success} {t('common.success')} · {quotaRefreshSummary.failed}{' '}
-                {t('common.failure')}
+                {quotaRefreshSummary.lastRefreshAt === null
+                  ? t('auth_files.refresh_not_available')
+                  : `${quotaRefreshSummary.success} ${t('common.success')} · ${
+                      quotaRefreshSummary.failed
+                    } ${t('common.failure')}`}
               </strong>
             </div>
           </div>

@@ -52,6 +52,7 @@ export type AuthFileCardProps = {
   onShowDetails: (file: AuthFileItem) => void;
   onDownload: (name: string) => void;
   onOpenPrefixProxyEditor: (file: AuthFileItem) => void;
+  onRefreshQuota: (file: AuthFileItem) => void;
   onDelete: (name: string) => void;
   onToggleStatus: (file: AuthFileItem, enabled: boolean) => void;
   onToggleSelect: (name: string) => void;
@@ -79,6 +80,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     onShowDetails,
     onDownload,
     onOpenPrefixProxyEditor,
+    onRefreshQuota,
     onDelete,
     onToggleStatus,
     onToggleSelect,
@@ -254,6 +256,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 file={file}
                 quotaType={quotaType}
                 disableControls={disableControls}
+                onRefreshQuota={onRefreshQuota}
               />
             )}
           </div>

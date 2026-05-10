@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -90,5 +91,44 @@ func TestListAuthFiles_IncludesRecentRequestsBuckets(t *testing.T) {
 		if _, ok := bucket["failed"].(float64); !ok {
 			t.Fatalf("expected bucket failed number at %d, got %#v", idx, bucket["failed"])
 		}
+	}
+}
+
+func TestListAuthFiles_IncludesQuotaRefreshStatus(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	gin.SetMode(gin.TestMode)
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, manager)
+	completedAt := time.Date(2026, 5, 10, 11, 37, 37, 0, time.UTC)
+	h.updateQuotaRefreshStatus(completedAt, map[string]quotaSnapshot{
+		"alpha.json": {Status: "success"},
+		"beta.json":  {Status: "error"},
+	})
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/auth-files", nil)
+
+	h.ListAuthFiles(ginCtx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected list status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		QuotaRefresh quotaRefreshStatus `json:"quota_refresh"`
+	}
+	if errUnmarshal := json.Unmarshal(rec.Body.Bytes(), &payload); errUnmarshal != nil {
+		t.Fatalf("failed to decode list payload: %v", errUnmarshal)
+	}
+	if payload.QuotaRefresh.LastCompletedAt != completedAt.Format(time.RFC3339) {
+		t.Fatalf("last completed at = %q, want %q", payload.QuotaRefresh.LastCompletedAt, completedAt.Format(time.RFC3339))
+	}
+	if payload.QuotaRefresh.NextRunAt != completedAt.Add(quotaRefreshInterval).Format(time.RFC3339) {
+		t.Fatalf("next run at = %q, want %q", payload.QuotaRefresh.NextRunAt, completedAt.Add(quotaRefreshInterval).Format(time.RFC3339))
+	}
+	if payload.QuotaRefresh.Success != 1 || payload.QuotaRefresh.Failed != 1 {
+		t.Fatalf("quota refresh counts = %d success, %d failed; want 1 success, 1 failed", payload.QuotaRefresh.Success, payload.QuotaRefresh.Failed)
 	}
 }

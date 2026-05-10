@@ -365,6 +365,63 @@ func TestCodexQuotaAutoRefreshStartStopIdempotent(t *testing.T) {
 	h.StopCodexQuotaAutoRefresh()
 }
 
+func TestQuotaRefreshStatusUsesBatchCompletion(t *testing.T) {
+	completedAt := time.Date(2026, 5, 10, 11, 37, 37, 0, time.UTC)
+	h := &Handler{}
+
+	h.updateQuotaRefreshStatus(completedAt, map[string]quotaSnapshot{
+		"alpha.json": {Status: "success", UpdatedAt: completedAt.Add(-time.Minute).Format(time.RFC3339)},
+		"beta.json":  {Status: "error", UpdatedAt: completedAt.Add(time.Minute).Format(time.RFC3339)},
+		"gamma.json": {Status: "skipped", UpdatedAt: completedAt.Add(2 * time.Minute).Format(time.RFC3339)},
+	})
+
+	status := h.quotaRefreshStatusSnapshot()
+	if status.LastCompletedAt != completedAt.Format(time.RFC3339) {
+		t.Fatalf("last completed at = %q, want %q", status.LastCompletedAt, completedAt.Format(time.RFC3339))
+	}
+	if status.NextRunAt != completedAt.Add(quotaRefreshInterval).Format(time.RFC3339) {
+		t.Fatalf("next run at = %q, want %q", status.NextRunAt, completedAt.Add(quotaRefreshInterval).Format(time.RFC3339))
+	}
+	if status.Success != 1 || status.Failed != 1 {
+		t.Fatalf("status counts = %d success, %d failed; want 1 success, 1 failed", status.Success, status.Failed)
+	}
+}
+
+func TestQuotaAutoRefreshDoesNotRecordCanceledBatch(t *testing.T) {
+	completedAt := time.Date(2026, 5, 10, 11, 37, 37, 0, time.UTC)
+	h, manager := newCodexQuotaTestHandler(t)
+	h.updateQuotaRefreshStatus(completedAt, map[string]quotaSnapshot{
+		"previous.json": {Status: "success", UpdatedAt: completedAt.Format(time.RFC3339)},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"plan_type":"plus"}`))
+	}))
+	defer upstream.Close()
+	restoreCodexQuotaURL(t, upstream.URL)
+
+	auth := testCodexAuth(t, "auth-1", "alpha.json", "acct-1", "plus", time.Now().Add(time.Hour))
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("failed to register auth: %v", errRegister)
+	}
+
+	h.refreshAllQuotaInBackground(ctx)
+
+	status := h.quotaRefreshStatusSnapshot()
+	if status.LastCompletedAt != completedAt.Format(time.RFC3339) {
+		t.Fatalf("last completed at = %q, want previous %q", status.LastCompletedAt, completedAt.Format(time.RFC3339))
+	}
+	if status.NextRunAt != completedAt.Add(quotaRefreshInterval).Format(time.RFC3339) {
+		t.Fatalf("next run at = %q, want previous %q", status.NextRunAt, completedAt.Add(quotaRefreshInterval).Format(time.RFC3339))
+	}
+	if status.Success != 1 || status.Failed != 0 {
+		t.Fatalf("status counts = %d success, %d failed; want previous 1 success, 0 failed", status.Success, status.Failed)
+	}
+}
+
 func testJWT(t *testing.T, payload map[string]any) string {
 	t.Helper()
 	header := map[string]any{"alg": "none", "typ": "JWT"}

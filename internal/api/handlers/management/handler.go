@@ -44,6 +44,7 @@ type Handler struct {
 	codexTokenRefreshMu  sync.Mutex
 	codexQuotaAutoCancel context.CancelFunc
 	codexQuotaAutoBusy   bool
+	quotaRefreshStatus   quotaRefreshStatus
 	codexQuotaAutoMu     sync.Mutex
 	authManager          *coreauth.Manager
 	tokenStore           coreauth.Store
