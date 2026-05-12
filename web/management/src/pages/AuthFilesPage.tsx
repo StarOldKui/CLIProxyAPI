@@ -72,6 +72,7 @@ import {
 import { useAuthStore, useNotificationStore, useQuotaStore, useThemeStore } from '@/stores';
 import {
   getStatusFromError,
+  normalizeNumberValue,
   normalizePlanType,
   resolveAuthProvider,
   resolveCodexPlanType,
@@ -203,8 +204,56 @@ const getCodexRemainingQuotaScore = (
   return Math.max(0, Math.min(100, 100 - clampedUsed));
 };
 
-const isCodexQuotaExhausted = (file: AuthFileItem, quota: CodexQuotaState | undefined): boolean =>
-  getCodexRemainingQuotaScore(file, quota) === 0;
+const isUsedPercentExhausted = (value: unknown): boolean => {
+  const usedPercent = normalizeNumberValue(value);
+  return usedPercent !== null && usedPercent >= 100;
+};
+
+const isRemainingFractionExhausted = (value: unknown): boolean => {
+  const remainingFraction = normalizeNumberValue(value);
+  return remainingFraction !== null && remainingFraction <= 0;
+};
+
+const isRemainingAmountExhausted = (value: unknown): boolean => {
+  const remainingAmount = normalizeNumberValue(value);
+  return remainingAmount !== null && remainingAmount <= 0;
+};
+
+const isSuccessfulQuotaUsageLimited = (provider: string, quota: AuthQuotaValue): boolean => {
+  if (quota.status !== 'success') return false;
+
+  if (provider === 'codex' || provider === 'claude') {
+    const windows = (quota as { windows?: Array<{ usedPercent?: unknown }> }).windows ?? [];
+    return windows.some((window) => isUsedPercentExhausted(window.usedPercent));
+  }
+
+  if (provider === 'antigravity') {
+    const groups = (quota as { groups?: Array<{ remainingFraction?: unknown }> }).groups ?? [];
+    return groups.some((group) => isRemainingFractionExhausted(group.remainingFraction));
+  }
+
+  if (provider === 'gemini-cli') {
+    const buckets =
+      (quota as { buckets?: Array<{ remainingAmount?: unknown; remainingFraction?: unknown }> })
+        .buckets ?? [];
+    return buckets.some(
+      (bucket) =>
+        isRemainingFractionExhausted(bucket.remainingFraction) ||
+        isRemainingAmountExhausted(bucket.remainingAmount)
+    );
+  }
+
+  if (provider === 'kimi') {
+    const rows = (quota as { rows?: Array<{ limit?: unknown; used?: unknown }> }).rows ?? [];
+    return rows.some((row) => {
+      const used = normalizeNumberValue(row.used);
+      const limit = normalizeNumberValue(row.limit);
+      return used !== null && limit !== null && limit > 0 && used >= limit;
+    });
+  }
+
+  return false;
+};
 
 const formatClockTime = (timestamp: number | null): string => {
   if (timestamp === null) return '';
@@ -229,12 +278,10 @@ const isAuthFileQuotaUsageLimited = (
   t: ReturnType<typeof useTranslation>['t']
 ): boolean => {
   const quota = getQuotaStateForAuthFile(file, quotaMaps, t);
+  const provider = resolveAuthProvider(file);
   if (quota) {
     if (quota.status === 'error' && isUsageLimitReachedMessage(quota.error ?? '')) return true;
-    if (resolveAuthProvider(file) === 'codex') {
-      return isCodexQuotaExhausted(file, quota as CodexQuotaState);
-    }
-    return false;
+    return isSuccessfulQuotaUsageLimited(provider, quota);
   }
 
   const snapshot = quotaSnapshotFromFile(file);
@@ -247,10 +294,7 @@ const isAuthFileQuotaUsageLimited = (
     return true;
   }
 
-  if (resolveAuthProvider(file) === 'codex') {
-    return isCodexQuotaExhausted(file, snapshot as CodexQuotaState);
-  }
-  return false;
+  return isSuccessfulQuotaUsageLimited(provider, snapshot as AuthQuotaValue);
 };
 
 const DisplayOptionIcon = ({ type }: { type: 'problem' | 'disabled' | 'quota' | 'compact' }) => {
