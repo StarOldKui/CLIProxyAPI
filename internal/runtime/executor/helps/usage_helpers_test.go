@@ -131,6 +131,40 @@ func TestParseGeminiCLIStreamUsage_IgnoresTrafficTypeOnlyUsageMetadata(t *testin
 	}
 }
 
+func TestParseGeminiStreamUsage_IgnoresTrafficTypeOnlyUsageMetadata(t *testing.T) {
+	line := []byte(`data: {"usageMetadata":{"trafficType":"ON_DEMAND"}}`)
+	if detail, ok := ParseGeminiStreamUsage(line); ok {
+		t.Fatalf("ParseGeminiStreamUsage() = (%+v, true), want false for traffic-only usage metadata", detail)
+	}
+}
+
+func TestParseGeminiStreamUsage_IgnoresZeroTokenUsageMetadata(t *testing.T) {
+	line := []byte(`data: {"usageMetadata":{"promptTokenCount":0,"candidatesTokenCount":0,"thoughtsTokenCount":0,"totalTokenCount":0}}`)
+	if detail, ok := ParseGeminiStreamUsage(line); ok {
+		t.Fatalf("ParseGeminiStreamUsage() = (%+v, true), want false for zero-token usage metadata", detail)
+	}
+}
+
+func TestParseGeminiStreamUsage_TokenFields(t *testing.T) {
+	line := []byte(`data: {"usageMetadata":{"promptTokenCount":656,"candidatesTokenCount":16,"thoughtsTokenCount":315,"totalTokenCount":987,"cachedContentTokenCount":0}}`)
+	detail, ok := ParseGeminiStreamUsage(line)
+	if !ok {
+		t.Fatal("ParseGeminiStreamUsage() ok = false, want true")
+	}
+	if detail.InputTokens != 656 {
+		t.Fatalf("input tokens = %d, want %d", detail.InputTokens, 656)
+	}
+	if detail.OutputTokens != 16 {
+		t.Fatalf("output tokens = %d, want %d", detail.OutputTokens, 16)
+	}
+	if detail.ReasoningTokens != 315 {
+		t.Fatalf("reasoning tokens = %d, want %d", detail.ReasoningTokens, 315)
+	}
+	if detail.TotalTokens != 987 {
+		t.Fatalf("total tokens = %d, want %d", detail.TotalTokens, 987)
+	}
+}
+
 func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	reporter := &UsageReporter{
 		provider:    "openai",
