@@ -9,9 +9,9 @@
 
 ## Product Boundary
 
-- Product: CLIProxyAPI, a Go proxy server exposing OpenAI, Gemini, Claude, Codex, and Amp-compatible APIs over local or hosted HTTP.
+- Product: CLIProxyAPI, a Go proxy server exposing OpenAI, Gemini, Claude, Codex, Interactions, and xAI-compatible APIs over local or hosted HTTP.
 - Primary repo path: `/Users/alen/Shrimpfall-Goose/Code/CLIProxyAPI`.
-- Module: `github.com/router-for-me/CLIProxyAPI/v6`.
+- Module: `github.com/router-for-me/CLIProxyAPI/v7`.
 - Server entrypoint: `cmd/server/main.go`.
 - Embeddable SDK entrypoint: `sdk/cliproxy`.
 - External model catalog source: embedded `internal/registry/models/models.json`, with optional remote refresh from `router-for-me/models` and `models.router-for.me`.
@@ -20,14 +20,14 @@
 ## What This Project Owns
 
 - CLI flags and service startup for login, TUI, standalone server, cloud standby, and proxy serving.
-- Gin HTTP API server, shared TCP protocol multiplexing, route registration, request auth, CORS, request logging, management routes, OAuth callbacks, Amp routes, and WebSocket relay attachment.
+- Gin HTTP API server, shared TCP protocol multiplexing, route registration, request auth, CORS, request logging, management routes, OAuth callbacks, realtime routes, and WebSocket relay attachment.
 - Config loading, validation, comment-preserving config writes, hot reload, auth file watching, and auth synthesis.
 - HTTP/TLS serving, Redis RESP usage queue access, optional pprof serving, request logging, log retention, streaming keep-alives, streaming bootstrap retries, and filtered upstream header passthrough.
 - Token/config persistence through local files, Postgres, git, or S3-compatible object storage with local mirrors.
 - Built-in management panel source, single-file panel build, and embedded `/management.html` serving.
 - OAuth quota snapshots for the management panel, including server-side refresh, per-auth quota grouping data, and Codex subscription expiry derived from ID-token claims.
 - Runtime auth manager integration, credential selection, retry/cooldown behavior, session affinity, model registration, and provider executor binding.
-- Provider executors for Gemini, Vertex, Gemini CLI, AI Studio relay, Antigravity, Claude, Codex HTTP/WebSocket, Kimi, and OpenAI-compatible providers.
+- Provider executors for Gemini, Vertex, AI Studio relay, Antigravity, Claude, Codex HTTP/WebSocket, Kimi, xAI HTTP/WebSocket/media, and OpenAI-compatible providers.
 - Protocol translation registration and request/response conversion between OpenAI, Gemini, Claude, Codex, and related formats.
 - Thinking normalization through `internal/thinking`: suffix parsing, canonical `ThinkingConfig`, validation/conversion, and provider-specific apply logic.
 - Codex Responses request shaping, including automatic `image_generation` tool injection where supported by global config, the base model, and selected auth.
@@ -57,13 +57,13 @@
 
 ## Request Flow
 
-- Client request enters Gin routes in `internal/api/server.go`.
+- Client request enters Gin routes in `internal/api/server_routes.go`; management routes live in `internal/api/server_management.go` and runtime reload behavior lives in `internal/api/server_reload.go`.
 - The server starts one TCP listener. `internal/api/protocol_multiplexer.go` routes HTTP and TLS-negotiated HTTP connections into the Gin HTTP server, and routes Redis RESP connections into `internal/api/redis_queue_protocol.go` when management routes are enabled.
 - `/healthz` serves GET/HEAD health checks. `/` serves a small JSON endpoint summary. `/management.html` serves the embedded management panel when the control panel is enabled; `MANAGEMENT_STATIC_PATH` can override it with an existing local file, and a missing override falls back to the embedded panel.
-- `/v1` routes serve OpenAI-compatible chat/completions, completions, image generations/edits, Claude messages/count_tokens, OpenAI Responses HTTP, OpenAI Responses WebSocket, Responses compact, and model listing.
+- `/v1` routes serve OpenAI-compatible chat/completions, completions, image generations/edits, xAI video operations, Claude messages/count_tokens, OpenAI Responses HTTP/WebSocket, Responses compact, Codex live/realtime, and model listing.
 - OpenAI Responses WebSocket handlers subscribe to Codex executor upstream disconnect notifications and close the downstream client connection when the pinned upstream WebSocket session is invalidated.
 - `/backend-api/codex` mirrors the Codex Responses routes for Codex CLI `chatgpt_base_url` compatibility: GET/POST `/responses` and POST `/responses/compact`.
-- `/v1beta` routes serve Gemini-compatible model listing and model actions.
+- `/v1beta` routes serve Gemini-compatible model listing, Interactions, and model actions.
 - `/v1internal:method` serves Gemini CLI internal requests and is gated by `enable-gemini-cli-endpoint`, loopback `RemoteAddr`, and `Host=127.0.0.1`.
 - `/v0/management` routes are registered when `remote-management.secret-key`, `MANAGEMENT_PASSWORD`, or a local TUI password exists, then gated by management middleware rather than normal API key auth.
 - `/v0/management/api-key-usage` returns in-memory API-key auth success/failure totals and 20 recent 10-minute request buckets grouped by provider and `base_url|api_key`.
@@ -71,11 +71,10 @@
 - `/v0/management/usage-queue?count=N` pops JSON usage records from the same in-memory queue exposed through the Redis RESP interface.
 - `/v0/management/quota/refresh` refreshes quota snapshots for selected or all supported OAuth auth files through CPA-managed token handling; `/codex-quota/refresh` remains a legacy alias. `/auth-files` also returns the last completed automatic quota-refresh batch status under `quota_refresh`.
 - `/v1/ws` is the WebSocket relay path attached by `Server.AttachWebsocketRoute`; it creates runtime-only `aistudio-*` providers through `internal/wsrelay`.
-- Amp routes live in `internal/api/modules/amp` and include `/api/provider/:provider/...`, `/api/provider/google/v1beta1/*path`, `/api/{internal,user,auth,meta,ads,telemetry,threads,otel,tab}` proxy routes, and root web routes such as `/threads`, `/docs`, `/settings`, `/auth`, and RSS endpoints.
 - Redis RESP usage queue access accepts `AUTH` with the management key and supports destructive `LPOP`/`RPOP` from the in-memory usage queue. Unauthenticated Redis commands return `NOAUTH`; management-disabled servers reject Redis protocol handling.
 - Standard provider request path:
   `Gin route -> AuthMiddleware -> sdk/api handler -> BaseAPIHandler -> coreauth.Manager -> provider executor -> sdk/translator -> upstream provider -> translator -> HTTP/SSE/WebSocket response`.
-- `BaseAPIHandler` passes cloned inbound HTTP headers into executor options so auth selection can use header-derived session affinity, including `X-Session-ID`, `Session_id`, `X-Amp-Thread-Id`, and `X-Client-Request-Id`.
+- `BaseAPIHandler` passes cloned inbound HTTP headers into executor options so auth selection can use header-derived session affinity, including `X-Claude-Code-Session-Id`, `X-Session-ID`, `Session-Id`, `Session_id`, `X-Session-Affinity`, and `X-Client-Request-Id`.
 - Executors translate the request into target provider format, apply `thinking.ApplyThinking`, apply payload/provider config, inject auth and headers, call upstream, translate responses back to the source format, and publish usage.
 - `sdk/cliproxy/usage.Manager` dispatches usage records to registered plugins. The Redis queue plugin includes provider, upstream model, client-requested alias, endpoint, auth type, auth index, API key, request ID, latency, status, error message for failed attempts, and token breakdown in queued records.
 - Built-in request access accepts configured `api-keys` from `Authorization`, `X-Goog-Api-Key`, `X-Api-Key`, query `key`, or query `auth_token`.
@@ -116,6 +115,7 @@
 - CLI OAuth uses `sdk/auth.Manager` and provider authenticators, then persists `coreauth.Auth` through the registered global token store.
 - Management auth starts under `/v0/management/*-auth-url`; callback-backed providers use `/v0/management/oauth-callback` or provider callback routes.
 - Anthropic, Codex, Gemini, and Antigravity management OAuth register a state, return an auth URL, write `.oauth-<provider>-<state>.oauth` callback files in `auth-dir`, exchange credentials in a background goroutine, and save auth JSON.
+- xAI login is available through CLI `--xai-login` and management `/xai-auth-url`; it uses xAI OIDC discovery plus OAuth device-code authorization and stores refreshable `xai` auth records. Static xAI keys use `xai-api-key`.
 - Kimi management auth uses device flow through `/v0/management/kimi-auth-url`; it waits for device authorization and does not use callback files.
 - Web UI OAuth requests may start temporary provider callback forwarders so vendor redirects land on the server callback routes.
 - OAuth sessions use short TTLs; callback file writers validate state/path inputs before touching auth files.
@@ -124,13 +124,14 @@
 
 ## Runtime And Translation Boundaries
 
-- `sdk/cliproxy/service.go` owns server startup, watcher startup, auth update queue, WebSocket gateway, model refresh callback, auto refresh, pprof, and graceful shutdown.
+- `sdk/cliproxy/service_lifecycle.go` owns server startup, watcher startup, auth update queue, WebSocket gateway, model refresh callback, auto refresh, usage persistence, pprof, and graceful shutdown.
 - `sdk/cliproxy/builder.go` wires defaults for token providers, API key providers, access manager, core auth manager, selector strategy, and server options.
 - `sdk/cliproxy/auth/conductor.go` owns auth selection, round-robin/fill-first strategy, session affinity, retries, cooldown, quota state, and executor dispatch. Selection reads persisted management quota snapshots from auth metadata, preemptively cools exhausted supported-provider credentials until a later quota refresh stores a recovered snapshot, applies model-scoped quota windows only to matching model requests, and honors metadata requests to skip free-tier Codex auth records.
 - `sdk/cliproxy/auth/antigravity_credits.go` owns Antigravity credits context flags and per-auth credits hints. Conductor-level fallback is enabled by `quota-exceeded.antigravity-credits` and only targets Antigravity Claude-model routes when normal selection or bootstrap execution reports exhaustion/unavailability.
 - `internal/runtime/executor` contains provider executors and their tests. Shared executor support belongs under `internal/runtime/executor/helps`.
 - `internal/runtime/executor/antigravity_executor.go` injects `enabledCreditTypes=["GOOGLE_ONE_AI"]` only when the conductor marks the context with Antigravity credits, updates credits balance hints from `loadCodeAssist`, and marks credits usage for logging.
 - `internal/runtime/executor/codex_executor.go` injects a PNG `image_generation` tool for Codex Responses HTTP, streaming, and compact requests unless `disable-image-generation` is enabled, the base model suffix indicates Spark, or the selected Codex auth is free-tier; existing image tools are preserved when the global gate allows image generation.
+- `internal/runtime/executor/xai_executor*.go` executes Grok chat/Responses requests over HTTP or WebSocket, handles xAI image/video endpoints, refreshes OAuth credentials, and publishes usage through the shared usage manager. The embedded xAI catalog includes `grok-4.6`.
 - `internal/runtime/executor/helps/payload_helpers.go` applies per-model payload config and removes `image_generation` tools from root or nested request tool arrays when `disable-image-generation` is enabled.
 - Codex image tool usage is parsed from `response.tool_usage.image_gen` and published as additional model usage, defaulting to `gpt-image-2` when the tool omits its own model.
 - `internal/runtime/executor/helps/usage_helpers.go` builds `sdk/cliproxy/usage.Record` values, carries the client-requested model alias when routing resolves to a different upstream model, and accepts Gemini CLI usage metadata at `response.usageMetadata` or top-level `usageMetadata`, including thought and cached token fields.
@@ -149,7 +150,6 @@
 - Object store: `OBJECTSTORE_ENDPOINT`, `OBJECTSTORE_BUCKET`, `OBJECTSTORE_ACCESS_KEY`, `OBJECTSTORE_SECRET_KEY`, `OBJECTSTORE_LOCAL_PATH`.
 - Runtime placement and mode: `WRITABLE_PATH` or `writable_path`, `DEPLOY`.
 - Management runtime secret and static asset override: `MANAGEMENT_PASSWORD`, `MANAGEMENT_STATIC_PATH`. `/management.html` serves the embedded panel unless the override resolves to an existing `management.html`.
-- Amp upstream secret fallback: `AMP_API_KEY`, after `ampcode.upstream-api-key` and before `~/.local/share/amp/secrets.json`.
 - Lowercase variants for store env keys are accepted by `cmd/server/main.go` for compatibility.
 
 ## Critical Invariants
@@ -167,7 +167,6 @@
 - Treat usage queue reads as destructive pops; external collectors must drain within `redis-usage-queue-retention-seconds`.
 - Keep `/v1/responses` WebSocket behavior distinct from `/v1/ws` relay behavior.
 - Keep `/backend-api/codex` as aliases over the same Responses handlers, not as a separate Codex execution path.
-- Scrub local client auth, fingerprint, and proxy headers before Amp upstream proxying.
 - Keep Antigravity credits fallback as conductor-owned last-resort behavior; the executor should only use credits when the context explicitly requests it.
 - Keep `disable-image-generation` as a global gate: image endpoints return 404, executor auto-injection is skipped, and request payload `image_generation` tools are stripped.
 - Keep Codex image tool injection conditional on global config, base model support, and selected auth capability, and avoid duplicating an existing client-provided `image_generation` tool.
@@ -176,17 +175,16 @@
 
 ## Child Codemaps
 
-- None. Add child codemaps only when API routes, management/OAuth, Amp, wsrelay, or storage details need standalone detail.
+- None. Add child codemaps only when API routes, management/OAuth, xAI, wsrelay, or storage details need standalone detail.
 
 ## Read-First Files
 
 - Startup and modes: `cmd/server/main.go`, `internal/cmd/run.go`.
 - Config schema and defaults: `internal/config/config.go`, `internal/config/sdk_config.go`, `config.example.yaml`.
-- Server and routes: `internal/api/server.go`, `internal/api/protocol_multiplexer.go`, `internal/api/redis_queue_protocol.go`, `sdk/api/handlers/handlers.go`, `sdk/api/handlers/openai/openai_handlers.go`, `sdk/api/handlers/openai/openai_responses_handlers.go`, `sdk/api/handlers/openai/openai_responses_websocket.go`, `sdk/api/handlers/openai/openai_images_handlers.go`, `sdk/api/handlers/gemini/gemini_handlers.go`, `sdk/api/handlers/claude/code_handlers.go`.
+- Server and routes: `internal/api/server.go`, `internal/api/server_routes.go`, `internal/api/server_management.go`, `internal/api/server_reload.go`, `internal/api/protocol_multiplexer.go`, `internal/api/redis_queue_protocol.go`, `sdk/api/handlers/handlers.go`, `sdk/api/handlers/openai/openai_handlers.go`, `sdk/api/handlers/openai/openai_responses_handlers.go`, `sdk/api/handlers/openai/openai_responses_websocket.go`, `sdk/api/handlers/openai/openai_images_handlers.go`, `sdk/api/handlers/openai/openai_videos_handlers.go`, `sdk/api/handlers/gemini/gemini_handlers.go`, `sdk/api/handlers/claude/code_handlers.go`.
 - Management and OAuth: `internal/api/handlers/management/handler.go`, `internal/api/handlers/management/auth_files.go`, `internal/api/handlers/management/codex_quota.go`, `internal/api/handlers/management/oauth_sessions.go`, `internal/api/handlers/management/oauth_callback.go`, `internal/api/handlers/management/usage.go`, `internal/api/handlers/management/api_key_usage.go`.
 - Runtime assets and diagnostics: `internal/managementasset/embedded.go`, `internal/managementasset/updater.go`, `web/management`, `internal/logging/global_logger.go`, `internal/logging/gin_logger.go`, `internal/logging/requestmeta.go`, `sdk/cliproxy/pprof_server.go`.
-- Amp: `internal/api/modules/amp/routes.go`, `internal/api/modules/amp/fallback_handlers.go`, `internal/api/modules/amp/proxy.go`.
-- SDK service: `sdk/cliproxy/builder.go`, `sdk/cliproxy/service.go`, `sdk/cliproxy/auth/conductor.go`, `sdk/cliproxy/auth/antigravity_credits.go`.
+- SDK service: `sdk/cliproxy/builder.go`, `sdk/cliproxy/service.go`, `sdk/cliproxy/service_lifecycle.go`, `sdk/cliproxy/auth/conductor.go`, `sdk/cliproxy/auth/antigravity_credits.go`.
 - Watcher and synthesis: `internal/watcher/watcher.go`, `internal/watcher/config_reload.go`, `internal/watcher/dispatcher.go`, `internal/watcher/synthesizer/config.go`, `internal/watcher/synthesizer/file.go`.
 - Stores: `sdk/auth/filestore.go`, `internal/store/postgresstore.go`, `internal/store/objectstore.go`, `internal/store/gitstore.go`.
 - Runtime execution: `internal/runtime/executor/*.go`, `internal/runtime/executor/helps/*.go`.

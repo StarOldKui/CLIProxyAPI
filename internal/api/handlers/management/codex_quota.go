@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	codexauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -404,7 +404,7 @@ func (h *Handler) refreshAntigravityQuotaForAuth(ctx context.Context, auth *core
 	now := time.Now().UTC()
 	snapshot := quotaSnapshot{Status: "error", UpdatedAt: now.Format(time.RFC3339)}
 
-	token, errToken := h.resolveTokenForAuth(ctx, auth)
+	token, errToken := h.resolveTokenForAuth(ctx, auth, "")
 	if errToken != nil {
 		snapshot.Error = errToken.Error()
 		_ = h.saveQuotaSnapshot(ctx, auth, snapshot, now)
@@ -455,7 +455,7 @@ func (h *Handler) refreshClaudeQuotaForAuth(ctx context.Context, auth *coreauth.
 	now := time.Now().UTC()
 	snapshot := quotaSnapshot{Status: "error", UpdatedAt: now.Format(time.RFC3339)}
 
-	token, errToken := h.resolveTokenForAuth(ctx, auth)
+	token, errToken := h.resolveTokenForAuth(ctx, auth, "")
 	if errToken != nil {
 		snapshot.Error = errToken.Error()
 		_ = h.saveQuotaSnapshot(ctx, auth, snapshot, now)
@@ -501,7 +501,7 @@ func (h *Handler) refreshGeminiCliQuotaForAuth(ctx context.Context, auth *coreau
 	now := time.Now().UTC()
 	snapshot := quotaSnapshot{Status: "error", UpdatedAt: now.Format(time.RFC3339)}
 
-	token, errToken := h.resolveTokenForAuth(ctx, auth)
+	token, errToken := h.resolveTokenForAuth(ctx, auth, "")
 	if errToken != nil {
 		snapshot.Error = errToken.Error()
 		_ = h.saveQuotaSnapshot(ctx, auth, snapshot, now)
@@ -553,7 +553,7 @@ func (h *Handler) refreshKimiQuotaForAuth(ctx context.Context, auth *coreauth.Au
 	now := time.Now().UTC()
 	snapshot := quotaSnapshot{Status: "error", UpdatedAt: now.Format(time.RFC3339)}
 
-	token, errToken := h.resolveTokenForAuth(ctx, auth)
+	token, errToken := h.resolveTokenForAuth(ctx, auth, "")
 	if errToken != nil {
 		snapshot.Error = errToken.Error()
 		_ = h.saveQuotaSnapshot(ctx, auth, snapshot, now)
@@ -643,22 +643,25 @@ func (h *Handler) codexAccessToken(ctx context.Context, auth *coreauth.Auth, for
 	}
 
 	if h.authManager != nil && auth.ID != "" {
-		updated, errPatch := h.authManager.Patch(ctx, auth.ID, func(latest *coreauth.Auth) {
-			if latest.Metadata == nil {
-				latest.Metadata = make(map[string]any)
+		latest, ok := h.authManager.GetByID(auth.ID)
+		if !ok || latest == nil {
+			latest = auth.Clone()
+		}
+		if latest.Metadata == nil {
+			latest.Metadata = make(map[string]any)
+		}
+		for key, value := range fields {
+			if text, okText := value.(string); okText {
+				latest.Metadata[key] = strings.TrimSpace(text)
+			} else {
+				latest.Metadata[key] = value
 			}
-			for key, value := range fields {
-				if text, ok := value.(string); ok {
-					latest.Metadata[key] = strings.TrimSpace(text)
-				} else {
-					latest.Metadata[key] = value
-				}
-			}
-			latest.LastRefreshedAt = now
-			latest.UpdatedAt = now
-		})
-		if errPatch != nil {
-			return auth, strings.TrimSpace(tokenData.AccessToken), errPatch
+		}
+		latest.LastRefreshedAt = now
+		latest.UpdatedAt = now
+		updated, errUpdate := h.authManager.Update(ctx, latest)
+		if errUpdate != nil {
+			return auth, strings.TrimSpace(tokenData.AccessToken), errUpdate
 		}
 		if updated != nil {
 			auth = updated
@@ -701,7 +704,7 @@ func (h *Handler) fetchCodexQuota(ctx context.Context, auth *coreauth.Auth, toke
 	req.Header.Set("User-Agent", "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal")
 	req.Header.Set("Chatgpt-Account-Id", accountID)
 
-	client := &http.Client{Transport: h.apiCallTransport(auth)}
+	client := &http.Client{Transport: h.apiCallTransport(auth, "")}
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		return 0, "", errDo
@@ -741,7 +744,7 @@ func (h *Handler) fetchBearerQuota(ctx context.Context, auth *coreauth.Auth, met
 		}
 	}
 
-	client := &http.Client{Transport: h.apiCallTransport(auth)}
+	client := &http.Client{Transport: h.apiCallTransport(auth, "")}
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		return 0, "", errDo
@@ -767,17 +770,20 @@ func (h *Handler) saveQuotaSnapshot(ctx context.Context, auth *coreauth.Auth, sn
 		snapshot.UpdatedAt = now.UTC().Format(time.RFC3339)
 	}
 	if h != nil && h.authManager != nil && auth.ID != "" {
-		_, errPatch := h.authManager.Patch(ctx, auth.ID, func(latest *coreauth.Auth) {
-			if latest.Metadata == nil {
-				latest.Metadata = make(map[string]any)
-			}
-			latest.Metadata["quota"] = snapshot
-			delete(latest.Metadata, "codex_quota")
-			latest.UpdatedAt = now.UTC()
-		})
-		if errPatch != nil {
-			log.WithError(errPatch).Warnf("failed to persist quota snapshot for %s", codexQuotaResultName(auth))
-			return errPatch
+		latest, ok := h.authManager.GetByID(auth.ID)
+		if !ok || latest == nil {
+			latest = auth.Clone()
+		}
+		if latest.Metadata == nil {
+			latest.Metadata = make(map[string]any)
+		}
+		latest.Metadata["quota"] = snapshot
+		delete(latest.Metadata, "codex_quota")
+		latest.UpdatedAt = now.UTC()
+		_, errUpdate := h.authManager.Update(ctx, latest)
+		if errUpdate != nil {
+			log.WithError(errUpdate).Warnf("failed to persist quota snapshot for %s", codexQuotaResultName(auth))
+			return errUpdate
 		}
 		return nil
 	}

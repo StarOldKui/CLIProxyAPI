@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 type apiKeyUsageEntry struct {
@@ -38,6 +38,19 @@ func mergeRecentRequestBuckets(dst, src []coreauth.RecentRequestBucket) []coreau
 		dst[i].Failed += src[i].Failed
 	}
 	return dst
+}
+
+func apiKeyUsageProviderKey(auth *coreauth.Auth) string {
+	provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+	if auth.Attributes != nil {
+		if compatName := strings.TrimSpace(auth.Attributes["compat_name"]); compatName != "" {
+			provider = strings.ToLower(compatName)
+		}
+	}
+	if provider == "" {
+		return "unknown"
+	}
+	return provider
 }
 
 // GetAPIKeyUsage returns recent request buckets for all in-memory api_key auths,
@@ -78,10 +91,7 @@ func (h *Handler) GetAPIKeyUsage(c *gin.Context) {
 			}
 		}
 		compositeKey := baseURL + "|" + apiKey
-		provider := strings.ToLower(strings.TrimSpace(auth.Provider))
-		if provider == "" {
-			provider = "unknown"
-		}
+		provider := apiKeyUsageProviderKey(auth)
 
 		recent := auth.RecentRequestsSnapshot(now)
 		providerBucket, ok := out[provider]

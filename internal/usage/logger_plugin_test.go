@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 func TestRequestStatisticsRecordIncludesLatency(t *testing.T) {
@@ -35,11 +35,11 @@ func TestRequestStatisticsRecordIncludesLatency(t *testing.T) {
 func TestRequestStatisticsRecordIncludesErrorMessage(t *testing.T) {
 	stats := NewRequestStatistics()
 	stats.Record(context.Background(), coreusage.Record{
-		APIKey:       "test-key",
-		Model:        "gpt-5.4",
-		RequestedAt:  time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC),
-		Failed:       true,
-		ErrorMessage: "  upstream rejected token  ",
+		APIKey:      "test-key",
+		Model:       "gpt-5.4",
+		RequestedAt: time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC),
+		Failed:      true,
+		Fail:        coreusage.Failure{Body: "  upstream rejected token  "},
 	})
 
 	snapshot := stats.Snapshot()

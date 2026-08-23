@@ -1,10 +1,59 @@
 package auth
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRequestRetryOverride(t *testing.T) {
+	var unset *Auth
+	if got, ok := unset.RequestRetryOverride(); ok || got != 0 {
+		t.Fatalf("nil auth override = (%d, %t), want (0, false)", got, ok)
+	}
+
+	auth := &Auth{}
+	if got, ok := auth.RequestRetryOverride(); ok || got != 0 {
+		t.Fatalf("empty auth override = (%d, %t), want (0, false)", got, ok)
+	}
+
+	auth = &Auth{Metadata: map[string]any{"request_retry": 0}}
+	if got, ok := auth.RequestRetryOverride(); !ok || got != 0 {
+		t.Fatalf("request_retry=0 override = (%d, %t), want (0, true)", got, ok)
+	}
+
+	auth = &Auth{Metadata: map[string]any{"request_retry": 3}}
+	if got, ok := auth.RequestRetryOverride(); !ok || got != 3 {
+		t.Fatalf("request_retry=3 override = (%d, %t), want (3, true)", got, ok)
+	}
+
+	auth = &Auth{Metadata: map[string]any{"request_retry": -1}}
+	if got, ok := auth.RequestRetryOverride(); ok || got != 0 {
+		t.Fatalf("request_retry=-1 override = (%d, %t), want (0, false)", got, ok)
+	}
+
+	auth = &Auth{Metadata: map[string]any{"request-retry": 2}}
+	if got, ok := auth.RequestRetryOverride(); !ok || got != 2 {
+		t.Fatalf("legacy request-retry=2 override = (%d, %t), want (2, true)", got, ok)
+	}
+
+	auth = &Auth{Metadata: map[string]any{"request-retry": -2}}
+	if got, ok := auth.RequestRetryOverride(); ok || got != 0 {
+		t.Fatalf("legacy request-retry=-2 override = (%d, %t), want (0, false)", got, ok)
+	}
+
+	auth = &Auth{Metadata: map[string]any{"request_retry": 0, "request-retry": 2}}
+	if got, ok := auth.RequestRetryOverride(); !ok || got != 0 {
+		t.Fatalf("canonical request_retry precedence = (%d, %t), want (0, true)", got, ok)
+	}
+
+	auth = &Auth{Metadata: map[string]any{"request_retry": "0"}}
+	if got, ok := auth.RequestRetryOverride(); !ok || got != 0 {
+		t.Fatalf("request_retry string 0 override = (%d, %t), want (0, true)", got, ok)
+	}
+}
 
 func TestToolPrefixDisabled(t *testing.T) {
 	var a *Auth
@@ -96,8 +145,40 @@ func TestEnsureIndexUsesCredentialIdentity(t *testing.T) {
 	if geminiIndex == altBaseIndex {
 		t.Fatalf("same provider/key with different base_url produced duplicate auth_index %q", geminiIndex)
 	}
-	if geminiIndex == duplicateIndex {
-		t.Fatalf("duplicate config entries should be separated by source-derived seed, got %q", geminiIndex)
+	if geminiIndex != duplicateIndex {
+		t.Fatalf("same provider/key with different source should share auth_index, got %q vs %q", geminiIndex, duplicateIndex)
+	}
+}
+
+func TestEnsureIndexUsesOAuthTypeAndAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	wd, errWd := os.Getwd()
+	if errWd != nil {
+		t.Fatalf("os.Getwd returned error: %v", errWd)
+	}
+
+	relPath := "test-oauth.json"
+	absPath := filepath.Join(wd, relPath)
+	expectedSeed := "antigravity:" + filepath.Clean(absPath)
+	expectedIndex := stableAuthIndex(expectedSeed)
+
+	a := &Auth{
+		Provider: "antigravity",
+		Attributes: map[string]string{
+			"path": relPath,
+		},
+		Metadata: map[string]any{
+			"type": "antigravity",
+		},
+	}
+
+	got := a.EnsureIndex()
+	if got == "" {
+		t.Fatal("auth index should not be empty")
+	}
+	if got != expectedIndex {
+		t.Fatalf("auth index = %q, want %q", got, expectedIndex)
 	}
 }
 
