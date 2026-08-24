@@ -15,7 +15,7 @@
 - Server entrypoint: `cmd/server/main.go`.
 - Embeddable SDK entrypoint: `sdk/cliproxy`.
 - External model catalog source: embedded `internal/registry/models/models.json`, with optional remote refresh from `router-for-me/models` and `models.router-for.me`.
-- Management panel source lives in `web/management`; the built single-file panel is embedded from `internal/managementasset/static/management.html`.
+- The deployed management panel is built from the pinned upstream Management Center commit and local patch declared by `web/management/build-upstream.sh`; the generated single-file asset lives at `internal/managementasset/static/management.html`.
 
 ## What This Project Owns
 
@@ -24,7 +24,7 @@
 - Config loading, validation, comment-preserving config writes, hot reload, auth file watching, and auth synthesis.
 - HTTP/TLS serving, Redis RESP usage queue access, optional pprof serving, request logging, log retention, streaming keep-alives, streaming bootstrap retries, and filtered upstream header passthrough.
 - Token/config persistence through local files, Postgres, git, or S3-compatible object storage with local mirrors.
-- Built-in management panel source, single-file panel build, and embedded `/management.html` serving.
+- Reproducible management panel build recipe, local behavior patch, generated single-file asset, and embedded `/management.html` serving.
 - OAuth quota snapshots for the management panel, including server-side refresh, per-auth quota grouping data, and Codex subscription expiry derived from ID-token claims.
 - Runtime auth manager integration, credential selection, retry/cooldown behavior, session affinity, model registration, and provider executor binding.
 - Provider executors for Gemini, Vertex, AI Studio relay, Antigravity, Claude, Codex HTTP/WebSocket, Kimi, xAI HTTP/WebSocket/media, and OpenAI-compatible providers.
@@ -92,8 +92,9 @@
 - Store implementations that expose `PersistConfig()` or `PersistAuthFiles()` are used by watcher/management changes to push local mirror updates to the remote backend.
 - `sdk/cliproxy.Service.Run` wires usage collection for CLI and SDK entrypoints. `internal/usage` aggregates records, including per-request failed-attempt error messages, into an in-process snapshot, loads `usage/usage.json`, flushes dirty snapshots every 15 minutes plus explicit import/shutdown flushes, and writes the same snapshot to S3-compatible object storage at `usage/usage.json` when `OBJECTSTORE_ENDPOINT` is selected.
 - Local Docker Compose maps `./usage` to `/CLIProxyAPI/usage`, matching the config/auth/log volume pattern so file-mode usage snapshots survive container recreation.
+- Local Docker Compose also mounts the tracked management panel asset at `/CLIProxyAPI/static/management.html`, keeping the locally patched panel stable instead of replacing it with the latest remote release at runtime.
 - Object-store usage snapshot restore compares `saved_at` with file/object modified times and keeps the newer local mirror when S3 still has an older snapshot; transient S3 read failures fall back to the local mirror when it is readable.
-- Management quota refresh stores the latest per-auth snapshot under auth metadata key `quota` for supported providers including Codex, Claude, Antigravity, Gemini CLI, and Kimi; this follows the existing auth-file/store persistence path instead of introducing a separate quota database.
+- Management quota refresh stores the latest per-auth snapshot under auth metadata key `quota` for supported providers including Codex, Claude, Antigravity, Gemini CLI, Kimi, and xAI; this follows the existing auth-file/store persistence path instead of introducing a separate quota database.
 - Redis usage queue stores JSON records in process memory under `internal/redisqueue`; `redis-usage-queue-retention-seconds` controls retention with default `60` and max `3600`. Disabling management clears the queue, and `usage-statistics-enabled` gates both persistent usage aggregation and Redis queue enqueuing.
 - `sdk/cliproxy/auth.Auth` keeps per-auth `Success`, `Failed`, and recent-request bucket counters in memory. These counters are preserved across runtime auth updates but are not serialized to auth JSON.
 
@@ -103,7 +104,8 @@
 - pprof is a separate optional HTTP server controlled by `pprof.enable` and `pprof.addr`, defaulting to `127.0.0.1:8316`, and is re-applied on hot reload.
 - Management panel serving prefers the embedded single-file asset. `MANAGEMENT_STATIC_PATH` is only a local debug override when its resolved `management.html` exists; the external auto-updater runs only when the binary has no embedded panel.
 - Management quota refresh starts only while management routes are enabled, stops with server shutdown or management disablement, runs every 5 minutes with concurrency 5, records one in-memory batch-level `last_completed_at`/`success`/`failed`/`next_run_at` status only after a non-canceled batch finishes, and exposes cached snapshots through `/auth-files`.
-- The management credential center is implemented by the `/auth-files` route; `/quota` redirects there. It renders all credentials grouped by provider in the all view, groups Codex credentials by plan inside Codex views, can sort within groups by name, priority, or remaining quota, polls auth file health and cached snapshots every 5 seconds while open, and displays quota refresh timing from the backend batch status instead of deriving it from individual auth snapshots.
+- The quota page reloads auth files every 60 seconds and hydrates Claude, Antigravity, Codex, xAI, and Kimi cards from newer persisted snapshots without issuing another provider request; xAI combines the persisted weekly usage and monthly billing responses.
+- `/auth-files` is the credential management route and refreshes its file list in the background every 4 minutes while visible. `/quota` is a separate quota dashboard that groups credentials by provider, groups Codex credentials by plan, supports name/priority/recovery sorting, and displays cached provider quota windows.
 - Log output uses stdout by default or rotating `main.log` when `logging-to-file` is enabled. Log directory resolution prefers `<WRITABLE_PATH>/logs`, then writable `./logs`, then `<auth-dir>/logs`.
 - `request-log` controls detailed request logging except in `commercial-mode`, which skips high-overhead request logging middleware.
 - Gin request logging appends `[credits]` when executor context marks an Antigravity request as using Google One AI credits.

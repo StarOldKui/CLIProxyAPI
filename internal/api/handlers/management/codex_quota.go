@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	codexauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	xaiauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/xai"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -36,6 +37,8 @@ var (
 	geminiCliCodeAssistURL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
 	geminiCliQuotaURL      = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
 	kimiUsageURL           = "https://api.kimi.com/coding/v1/usages"
+	xaiBillingCreditsURL   = xaiauth.CLIChatProxyBaseURL + "/billing?format=credits"
+	xaiBillingURL          = xaiauth.CLIChatProxyBaseURL + "/billing"
 )
 
 const defaultAntigravityProjectID = "bamboo-precept-lgxtn"
@@ -228,7 +231,8 @@ func (h *Handler) quotaTargets(names []string, all bool) []*coreauth.Auth {
 		if auth == nil || auth.Disabled || !quotaProviderSupported(auth.Provider) {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		provider := strings.ToLower(strings.TrimSpace(auth.Provider))
+		if provider == "codex" || provider == "xai" {
 			if accountType, _ := auth.AccountInfo(); strings.EqualFold(accountType, "api_key") {
 				continue
 			}
@@ -261,7 +265,7 @@ func (h *Handler) codexQuotaTargets(names []string, all bool) []*coreauth.Auth {
 
 func quotaProviderSupported(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "antigravity", "claude", "codex", "gemini-cli", "kimi":
+	case "antigravity", "claude", "codex", "gemini-cli", "kimi", "xai":
 		return true
 	default:
 		return false
@@ -326,6 +330,8 @@ func (h *Handler) refreshQuotaForAuth(ctx context.Context, auth *coreauth.Auth) 
 		return h.refreshGeminiCliQuotaForAuth(ctx, auth)
 	case "kimi":
 		return h.refreshKimiQuotaForAuth(ctx, auth)
+	case "xai":
+		return h.refreshXAIQuotaForAuth(ctx, auth)
 	default:
 		now := time.Now().UTC()
 		return quotaSnapshot{
@@ -583,6 +589,54 @@ func (h *Handler) refreshKimiQuotaForAuth(ctx context.Context, auth *coreauth.Au
 	return snapshot
 }
 
+func (h *Handler) refreshXAIQuotaForAuth(ctx context.Context, auth *coreauth.Auth) quotaSnapshot {
+	now := time.Now().UTC()
+	snapshot := quotaSnapshot{Status: "error", UpdatedAt: now.Format(time.RFC3339)}
+
+	token, errToken := h.resolveTokenForAuth(ctx, auth, "")
+	if errToken != nil {
+		snapshot.Error = errToken.Error()
+		_ = h.saveQuotaSnapshot(ctx, auth, snapshot, now)
+		return snapshot
+	}
+	headers := map[string]string{
+		"X-XAI-Token-Auth":      "xai-grok-cli",
+		"X-Grok-Client-Version": "0.2.120",
+		"User-Agent":            "xai-grok-workspace/0.2.120",
+	}
+	if subject := stringValue(auth.Metadata, "sub"); subject != "" {
+		headers["X-UserID"] = subject
+	}
+
+	creditsStatus, creditsBody, errCredits := h.fetchBearerQuota(ctx, auth, http.MethodGet, xaiBillingCreditsURL, token, headers, "")
+	billingStatus, billingBody, errBilling := h.fetchBearerQuota(ctx, auth, http.MethodGet, xaiBillingURL, token, headers, "")
+	snapshot.StatusCode = creditsStatus
+	snapshot.Body = creditsBody
+	snapshot.SupplementaryStatusCode = billingStatus
+	snapshot.SupplementaryBody = billingBody
+	creditsOK := errCredits == nil && creditsStatus >= http.StatusOK && creditsStatus < http.StatusMultipleChoices
+	billingOK := errBilling == nil && billingStatus >= http.StatusOK && billingStatus < http.StatusMultipleChoices
+	if creditsOK || billingOK {
+		snapshot.Status = "success"
+	} else if errCredits != nil {
+		snapshot.Error = errCredits.Error()
+	} else if message := strings.TrimSpace(creditsBody); message != "" {
+		snapshot.Error = message
+	} else if errBilling != nil {
+		snapshot.Error = errBilling.Error()
+	} else {
+		snapshot.Error = strings.TrimSpace(billingBody)
+	}
+	if snapshot.Status == "error" && snapshot.Error == "" {
+		snapshot.Error = fmt.Sprintf("xai quota requests failed with status %d and %d", creditsStatus, billingStatus)
+	}
+	if errSave := h.saveQuotaSnapshot(ctx, auth, snapshot, now); errSave != nil {
+		snapshot.Status = "error"
+		snapshot.Error = fmt.Sprintf("failed to persist quota snapshot: %v", errSave)
+	}
+	return snapshot
+}
+
 func (h *Handler) codexAccessToken(ctx context.Context, auth *coreauth.Auth, force bool) (*coreauth.Auth, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -707,7 +761,7 @@ func (h *Handler) fetchCodexQuota(ctx context.Context, auth *coreauth.Auth, toke
 	req.Header.Set("User-Agent", "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal")
 	req.Header.Set("Chatgpt-Account-Id", accountID)
 
-	client := &http.Client{Transport: h.apiCallTransport(auth, "")}
+	client := &http.Client{Timeout: defaultAPICallTimeout, Transport: h.apiCallTransport(auth, "")}
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		return 0, "", errDo
@@ -747,7 +801,7 @@ func (h *Handler) fetchBearerQuota(ctx context.Context, auth *coreauth.Auth, met
 		}
 	}
 
-	client := &http.Client{Transport: h.apiCallTransport(auth, "")}
+	client := &http.Client{Timeout: defaultAPICallTimeout, Transport: h.apiCallTransport(auth, "")}
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		return 0, "", errDo

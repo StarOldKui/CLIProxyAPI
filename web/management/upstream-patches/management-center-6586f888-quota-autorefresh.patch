@@ -1,0 +1,529 @@
+diff --git a/src/features/quota/QuotaPage.tsx b/src/features/quota/QuotaPage.tsx
+index f1c07f3..e6eee58 100644
+--- a/src/features/quota/QuotaPage.tsx
++++ b/src/features/quota/QuotaPage.tsx
+@@ -52,0 +53 @@ const SKELETON_CARD_COUNT = 6;
++const AUTH_FILES_POLL_INTERVAL_MS = 60_000;
+@@ -80,13 +81,20 @@ export function QuotaPage() {
+-  const loadFiles = useCallback(async () => {
+-    setLoading(true);
+-    setError('');
+-    try {
+-      const data = await authFilesApi.list();
+-      setFiles(data?.files || []);
+-    } catch (err: unknown) {
+-      const message = err instanceof Error ? err.message : t('notification.refresh_failed');
+-      setError(message);
+-    } finally {
+-      setLoading(false);
+-    }
+-  }, [t]);
++  const loadFiles = useCallback(
++    async (silent = false) => {
++      if (!silent) {
++        setLoading(true);
++        setError('');
++      }
++      try {
++        const data = await authFilesApi.list();
++        setFiles(data?.files || []);
++      } catch (err: unknown) {
++        if (!silent) {
++          const message = err instanceof Error ? err.message : t('notification.refresh_failed');
++          setError(message);
++        }
++      } finally {
++        if (!silent) setLoading(false);
++      }
++    },
++    [t]
++  );
+@@ -99,0 +108,5 @@ export function QuotaPage() {
++  useEffect(() => {
++    const timer = window.setInterval(() => void loadFiles(true), AUTH_FILES_POLL_INTERVAL_MS);
++    return () => window.clearInterval(timer);
++  }, [loadFiles]);
++
+@@ -201,0 +215,24 @@ export function QuotaPage() {
++  useEffect(() => {
++    if (loading) return;
++    entries.forEach((entry) => {
++      const adapter = QUOTA_ADAPTERS[entry.type];
++      const cached = adapter.getCachedState(entry.file, t);
++      if (!cached) return;
++
++      const setQuota = getQuotaSetter(adapter);
++      setQuota((prev) => {
++        const current = prev[entry.file.name];
++        if (current?.status === 'loading') return prev;
++        const cachedAt = Date.parse(cached.updatedAt ?? '');
++        const currentAt = Date.parse(current?.updatedAt ?? '');
++        if (
++          current &&
++          (!Number.isFinite(cachedAt) || (Number.isFinite(currentAt) && currentAt >= cachedAt))
++        ) {
++          return prev;
++        }
++        return { ...prev, [entry.file.name]: cached };
++      });
++    });
++  }, [entries, loading, t]);
++
+diff --git a/src/features/quota/providers/antigravity/data.ts b/src/features/quota/providers/antigravity/data.ts
+index 0a04a57..4b4fae1 100644
+--- a/src/features/quota/providers/antigravity/data.ts
++++ b/src/features/quota/providers/antigravity/data.ts
+@@ -23,0 +24 @@ import {
++  normalizeQuotaFraction,
+@@ -33,0 +35 @@ import type { QuotaProviderData } from '../types';
++import { getQuotaSnapshot, getSnapshotErrorStatus, getSnapshotText } from '../cached';
+@@ -201,0 +204,63 @@ const fetchAntigravityQuota = async (
++const buildCachedAntigravityGroups = (body: unknown): AntigravityQuotaGroup[] => {
++  const payload = parseAntigravityPayload(body);
++  if (!payload) return [];
++  if (Array.isArray(payload.groups)) {
++    return buildAntigravityQuotaGroups(payload as AntigravityQuotaSummaryPayload);
++  }
++  const models = payload.models;
++  if (!models || typeof models !== 'object' || Array.isArray(models)) return [];
++
++  return Object.entries(models as Record<string, unknown>).flatMap(([modelId, value]) => {
++    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
++    const model = value as Record<string, unknown>;
++    const rawQuota = model.quotaInfo ?? model.quota_info;
++    if (!rawQuota || typeof rawQuota !== 'object' || Array.isArray(rawQuota)) return [];
++    const quota = rawQuota as Record<string, unknown>;
++    const remainingFraction = normalizeQuotaFraction(
++      quota.remainingFraction ?? quota.remaining_fraction ?? quota.remaining
++    );
++    if (remainingFraction === null) return [];
++    const label = normalizeStringValue(model.displayName ?? model.display_name) ?? modelId;
++    const resetTime = normalizeStringValue(quota.resetTime ?? quota.reset_time) ?? undefined;
++    return [
++      {
++        id: modelId,
++        label,
++        buckets: [{ id: modelId, label, remainingFraction, resetTime }],
++      },
++    ];
++  });
++};
++
++export const getCachedAntigravityQuotaState = (
++  file: AuthFileItem,
++  t: TFunction
++): AntigravityQuotaState | null => {
++  const snapshot = getQuotaSnapshot(file);
++  const updatedAt = getSnapshotText(snapshot?.updated_at);
++  if (!snapshot || !updatedAt) return null;
++  if (snapshot.status !== 'success') {
++    return {
++      status: 'error',
++      groups: [],
++      subscription: null,
++      serverTimeOffsetMs: null,
++      error: getSnapshotText(snapshot.error) ?? t('common.unknown_error'),
++      errorStatus: getSnapshotErrorStatus(snapshot),
++      updatedAt,
++    };
++  }
++  const groups = buildCachedAntigravityGroups(snapshot.body);
++  if (groups.length === 0) {
++    return {
++      status: 'error',
++      groups: [],
++      subscription: null,
++      serverTimeOffsetMs: null,
++      error: t('antigravity_quota.empty_models'),
++      updatedAt,
++    };
++  }
++  return { status: 'success', groups, subscription: null, serverTimeOffsetMs: null, updatedAt };
++};
++
+@@ -219,0 +285 @@ export const ANTIGRAVITY_CONFIG: QuotaProviderData<AntigravityQuotaState, Antigr
++    updatedAt: new Date().toISOString(),
+@@ -227,0 +294 @@ export const ANTIGRAVITY_CONFIG: QuotaProviderData<AntigravityQuotaState, Antigr
++    updatedAt: new Date().toISOString(),
+@@ -228,0 +296 @@ export const ANTIGRAVITY_CONFIG: QuotaProviderData<AntigravityQuotaState, Antigr
++  getCachedState: getCachedAntigravityQuotaState,
+diff --git a/src/features/quota/providers/cached.ts b/src/features/quota/providers/cached.ts
+new file mode 100644
+index 0000000..ffca7d2
+--- /dev/null
++++ b/src/features/quota/providers/cached.ts
+@@ -0,0 +1,29 @@
++import type { AuthFileItem } from '@/types';
++
++export interface QuotaSnapshot {
++  status?: unknown;
++  status_code?: unknown;
++  body?: unknown;
++  error?: unknown;
++  updated_at?: unknown;
++  profile_body?: unknown;
++  supplementary_body?: unknown;
++  plan_type?: unknown;
++  subscription_active_until?: unknown;
++}
++
++export const getQuotaSnapshot = (file: AuthFileItem): QuotaSnapshot | null => {
++  const snapshot = file.quota;
++  return snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
++    ? (snapshot as QuotaSnapshot)
++    : null;
++};
++
++export const getSnapshotErrorStatus = (snapshot: QuotaSnapshot): number | undefined => {
++  const status = Number(snapshot.status_code);
++  return Number.isFinite(status) && status > 0 ? status : undefined;
++};
++
++export const getSnapshotText = (value: unknown): string | null => {
++  return typeof value === 'string' && value.trim() ? value.trim() : null;
++};
+diff --git a/src/features/quota/providers/claude/data.ts b/src/features/quota/providers/claude/data.ts
+index 70f095c..ecc0cbd 100644
+--- a/src/features/quota/providers/claude/data.ts
++++ b/src/features/quota/providers/claude/data.ts
+@@ -32,0 +33 @@ import type { QuotaProviderData } from '../types';
++import { getQuotaSnapshot, getSnapshotErrorStatus, getSnapshotText } from '../cached';
+@@ -205,0 +207,29 @@ const fetchClaudeQuota = async (file: AuthFileItem, t: TFunction): Promise<Claud
++export const getCachedClaudeQuotaState = (
++  file: AuthFileItem,
++  t: TFunction
++): ClaudeQuotaState | null => {
++  const snapshot = getQuotaSnapshot(file);
++  const updatedAt = getSnapshotText(snapshot?.updated_at);
++  if (!snapshot || !updatedAt) return null;
++  if (snapshot.status !== 'success') {
++    return {
++      status: 'error',
++      windows: [],
++      error: getSnapshotText(snapshot.error) ?? t('common.unknown_error'),
++      errorStatus: getSnapshotErrorStatus(snapshot),
++      updatedAt,
++    };
++  }
++  const payload = parseClaudeUsagePayload(snapshot.body);
++  if (!payload) {
++    return { status: 'error', windows: [], error: t('claude_quota.empty_windows'), updatedAt };
++  }
++  return {
++    status: 'success',
++    windows: buildClaudeQuotaWindows(payload, t),
++    extraUsage: payload.extra_usage,
++    planType: resolveClaudePlanType(parseClaudeProfilePayload(snapshot.profile_body)),
++    updatedAt,
++  };
++};
++
+@@ -218,0 +249 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
++    updatedAt: new Date().toISOString(),
+@@ -224,0 +256 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
++    updatedAt: new Date().toISOString(),
+@@ -225,0 +258 @@ export const CLAUDE_CONFIG: QuotaProviderData<ClaudeQuotaState, ClaudeQuotaData>
++  getCachedState: getCachedClaudeQuotaState,
+diff --git a/src/features/quota/providers/codex/data.ts b/src/features/quota/providers/codex/data.ts
+index dfbb10c..1a4f19c 100644
+--- a/src/features/quota/providers/codex/data.ts
++++ b/src/features/quota/providers/codex/data.ts
+@@ -39,0 +40 @@ import type { QuotaProviderData } from '../types';
++import { getQuotaSnapshot, getSnapshotErrorStatus, getSnapshotText } from '../cached';
+@@ -406,0 +408,50 @@ const fetchCodexQuota = async (file: AuthFileItem, t: TFunction): Promise<CodexQ
++export const getCachedCodexQuotaState = (
++  file: AuthFileItem,
++  t: TFunction
++): CodexQuotaState | null => {
++  const snapshot = getQuotaSnapshot(file);
++  const updatedAt = getSnapshotText(snapshot?.updated_at);
++  if (!snapshot || !updatedAt) return null;
++  if (snapshot.status !== 'success') {
++    return {
++      status: 'error',
++      windows: [],
++      rateLimitResetCredits: [],
++      rateLimitResetCreditsError: '',
++      error: getSnapshotText(snapshot.error) ?? t('common.unknown_error'),
++      errorStatus: getSnapshotErrorStatus(snapshot),
++      updatedAt,
++    };
++  }
++  const payload = parseCodexUsagePayload(snapshot.body);
++  if (!payload) {
++    return {
++      status: 'error',
++      windows: [],
++      rateLimitResetCredits: [],
++      rateLimitResetCreditsError: '',
++      error: t('codex_quota.empty_windows'),
++      updatedAt,
++    };
++  }
++  const resetCredits = normalizeCodexResetCreditsPayload(
++    payload.rate_limit_reset_credits ?? payload.rateLimitResetCredits ?? null
++  );
++  return {
++    status: 'success',
++    windows: buildCodexQuotaWindows(payload, t),
++    planType:
++      normalizePlanType(payload.plan_type ?? payload.planType) ??
++      normalizePlanType(snapshot.plan_type) ??
++      resolveCodexPlanType(file),
++    subscriptionActiveUntil:
++      getSnapshotText(snapshot.subscription_active_until) ??
++      resolveCodexSubscriptionActiveUntil(file),
++    rateLimitResetCreditsAvailableCount: resetCredits.availableCount,
++    rateLimitResetCreditsApplicableAvailableCount: resetCredits.applicableAvailableCount,
++    rateLimitResetCredits: [],
++    rateLimitResetCreditsError: '',
++    updatedAt,
++  };
++};
++
+@@ -475,0 +527 @@ export const CODEX_CONFIG: QuotaProviderData<CodexQuotaState, CodexQuotaData> =
++    updatedAt: new Date().toISOString(),
+@@ -483,0 +536 @@ export const CODEX_CONFIG: QuotaProviderData<CodexQuotaState, CodexQuotaData> =
++    updatedAt: new Date().toISOString(),
+@@ -484,0 +538 @@ export const CODEX_CONFIG: QuotaProviderData<CodexQuotaState, CodexQuotaData> =
++  getCachedState: getCachedCodexQuotaState,
+diff --git a/src/features/quota/providers/index.ts b/src/features/quota/providers/index.ts
+index b24942c..d01ac39 100644
+--- a/src/features/quota/providers/index.ts
++++ b/src/features/quota/providers/index.ts
+@@ -29,0 +30 @@ export interface QuotaCardState {
++  updatedAt?: string;
+@@ -43,0 +45 @@ export interface QuotaAdapter {
++  getCachedState: (file: AuthFileItem, t: TFunction) => QuotaCardState | null;
+diff --git a/src/features/quota/providers/kimi/data.ts b/src/features/quota/providers/kimi/data.ts
+index 27766d0..f1b5651 100644
+--- a/src/features/quota/providers/kimi/data.ts
++++ b/src/features/quota/providers/kimi/data.ts
+@@ -18,0 +19 @@ import type { QuotaProviderData } from '../types';
++import { getQuotaSnapshot, getSnapshotErrorStatus, getSnapshotText } from '../cached';
+@@ -45,0 +47,23 @@ const fetchKimiQuota = async (file: AuthFileItem, t: TFunction): Promise<KimiQuo
++export const getCachedKimiQuotaState = (
++  file: AuthFileItem,
++  t: TFunction
++): KimiQuotaState | null => {
++  const snapshot = getQuotaSnapshot(file);
++  const updatedAt = getSnapshotText(snapshot?.updated_at);
++  if (!snapshot || !updatedAt) return null;
++  if (snapshot.status !== 'success') {
++    return {
++      status: 'error',
++      rows: [],
++      error: getSnapshotText(snapshot.error) ?? t('common.unknown_error'),
++      errorStatus: getSnapshotErrorStatus(snapshot),
++      updatedAt,
++    };
++  }
++  const payload = parseKimiUsagePayload(snapshot.body);
++  if (!payload) {
++    return { status: 'error', rows: [], error: t('kimi_quota.empty_data'), updatedAt };
++  }
++  return { status: 'success', rows: buildKimiQuotaRows(payload), updatedAt };
++};
++
+@@ -54 +78 @@ export const KIMI_CONFIG: QuotaProviderData<KimiQuotaState, KimiQuotaRow[]> = {
+-  buildSuccessState: (rows) => ({ status: 'success', rows }),
++  buildSuccessState: (rows) => ({ status: 'success', rows, updatedAt: new Date().toISOString() }),
+@@ -59,0 +84 @@ export const KIMI_CONFIG: QuotaProviderData<KimiQuotaState, KimiQuotaRow[]> = {
++    updatedAt: new Date().toISOString(),
+@@ -60,0 +86 @@ export const KIMI_CONFIG: QuotaProviderData<KimiQuotaState, KimiQuotaRow[]> = {
++  getCachedState: getCachedKimiQuotaState,
+diff --git a/src/features/quota/providers/types.ts b/src/features/quota/providers/types.ts
+index 2ef0270..8384b15 100644
+--- a/src/features/quota/providers/types.ts
++++ b/src/features/quota/providers/types.ts
+@@ -48,0 +49 @@ export interface QuotaProviderData<TState, TData> {
++  getCachedState: (file: AuthFileItem, t: TFunction) => TState | null;
+diff --git a/src/features/quota/providers/xai/data.ts b/src/features/quota/providers/xai/data.ts
+index aff5a47..5eb513c 100644
+--- a/src/features/quota/providers/xai/data.ts
++++ b/src/features/quota/providers/xai/data.ts
+@@ -28,0 +29 @@ import type { QuotaProviderData } from '../types';
++import { getQuotaSnapshot, getSnapshotErrorStatus, getSnapshotText } from '../cached';
+@@ -99,0 +101,26 @@ const requestXaiBilling = async (
++export const getCachedXaiQuotaState = (file: AuthFileItem, t: TFunction): XaiQuotaState | null => {
++  const snapshot = getQuotaSnapshot(file);
++  const updatedAt = getSnapshotText(snapshot?.updated_at);
++  if (!snapshot || !updatedAt) return null;
++
++  if (snapshot.status !== 'success') {
++    return {
++      status: 'error',
++      billing: null,
++      error: getSnapshotText(snapshot.error) ?? t('xai_quota.empty_data'),
++      errorStatus: getSnapshotErrorStatus(snapshot),
++      updatedAt,
++    };
++  }
++
++  const weekly = buildXaiBillingSummary(parseXaiBillingPayload(snapshot.body)?.config);
++  const monthly = buildXaiBillingSummary(
++    parseXaiBillingPayload(snapshot.supplementary_body)?.config
++  );
++  const billing = mergeXaiBillingSummaries(weekly, monthly);
++  if (!billing) {
++    return { status: 'error', billing: null, error: t('xai_quota.empty_data'), updatedAt };
++  }
++  return { status: 'success', billing, updatedAt };
++};
++
+@@ -190 +217,5 @@ export const XAI_CONFIG: QuotaProviderData<XaiQuotaState, XaiBillingSummary> = {
+-  buildSuccessState: (billing) => ({ status: 'success', billing }),
++  buildSuccessState: (billing) => ({
++    status: 'success',
++    billing,
++    updatedAt: new Date().toISOString(),
++  }),
+@@ -195,0 +227 @@ export const XAI_CONFIG: QuotaProviderData<XaiQuotaState, XaiBillingSummary> = {
++    updatedAt: new Date().toISOString(),
+@@ -196,0 +229 @@ export const XAI_CONFIG: QuotaProviderData<XaiQuotaState, XaiBillingSummary> = {
++  getCachedState: getCachedXaiQuotaState,
+diff --git a/src/types/quota.ts b/src/types/quota.ts
+index 8472879..779d661 100644
+--- a/src/types/quota.ts
++++ b/src/types/quota.ts
+@@ -175,0 +176 @@ export interface ClaudeQuotaState {
++  updatedAt?: string;
+@@ -219,0 +221 @@ export interface AntigravityQuotaState {
++  updatedAt?: string;
+@@ -245,0 +248 @@ export interface CodexQuotaState {
++  updatedAt?: string;
+@@ -310,0 +314 @@ export interface KimiQuotaState {
++  updatedAt?: string;
+@@ -398,0 +403 @@ export interface XaiQuotaState {
++  updatedAt?: string;
+diff --git a/tests/quotaCachedState.test.ts b/tests/quotaCachedState.test.ts
+new file mode 100644
+index 0000000..33d2241
+--- /dev/null
++++ b/tests/quotaCachedState.test.ts
+@@ -0,0 +1,125 @@
++import { describe, expect, test } from 'bun:test';
++import type { TFunction } from 'i18next';
++import { getCachedAntigravityQuotaState } from '@/features/quota/providers/antigravity/data';
++import { getCachedClaudeQuotaState } from '@/features/quota/providers/claude/data';
++import { getCachedCodexQuotaState } from '@/features/quota/providers/codex/data';
++import { getCachedKimiQuotaState } from '@/features/quota/providers/kimi/data';
++import { getCachedXaiQuotaState } from '@/features/quota/providers/xai/data';
++
++const t = ((key: string) => key) as TFunction;
++const updatedAt = '2026-08-24T06:57:52Z';
++
++describe('cached quota states', () => {
++  test('hydrates Codex and Claude windows', () => {
++    const codex = getCachedCodexQuotaState(
++      {
++        name: 'codex.json',
++        type: 'codex',
++        quota: {
++          status: 'success',
++          updated_at: updatedAt,
++          body: JSON.stringify({
++            plan_type: 'pro',
++            rate_limit: {
++              primary_window: {
++                used_percent: 25,
++                limit_window_seconds: 18000,
++                reset_at: 1785902974,
++              },
++            },
++          }),
++        },
++      },
++      t
++    );
++    const claude = getCachedClaudeQuotaState(
++      {
++        name: 'claude.json',
++        type: 'claude',
++        quota: {
++          status: 'success',
++          updated_at: updatedAt,
++          body: JSON.stringify({ five_hour: { utilization: 40, resets_at: updatedAt } }),
++        },
++      },
++      t
++    );
++
++    expect(codex).toMatchObject({ status: 'success', planType: 'pro', updatedAt });
++    expect(codex?.windows[0]?.usedPercent).toBe(25);
++    expect(claude).toMatchObject({ status: 'success', updatedAt });
++    expect(claude?.windows[0]?.usedPercent).toBe(40);
++  });
++
++  test('hydrates legacy Antigravity models and Kimi usage', () => {
++    const antigravity = getCachedAntigravityQuotaState(
++      {
++        name: 'antigravity.json',
++        type: 'antigravity',
++        quota: {
++          status: 'success',
++          updated_at: updatedAt,
++          body: JSON.stringify({
++            models: {
++              'gemini-test': {
++                displayName: 'Gemini Test',
++                quotaInfo: { remainingFraction: 0.75, resetTime: updatedAt },
++              },
++            },
++          }),
++        },
++      },
++      t
++    );
++    const kimi = getCachedKimiQuotaState(
++      {
++        name: 'kimi.json',
++        type: 'kimi',
++        quota: {
++          status: 'success',
++          updated_at: updatedAt,
++          body: JSON.stringify({ usage: { used: 10, limit: 100, remaining: 90 } }),
++        },
++      },
++      t
++    );
++
++    expect(antigravity).toMatchObject({ status: 'success', updatedAt });
++    expect(antigravity?.groups[0]?.buckets[0]?.remainingFraction).toBe(0.75);
++    expect(kimi).toMatchObject({ status: 'success', updatedAt });
++    expect(kimi?.rows[0]).toMatchObject({ used: 10, limit: 100 });
++  });
++
++  test('hydrates merged xAI billing and persisted errors', () => {
++    const xai = getCachedXaiQuotaState(
++      {
++        name: 'xai.json',
++        type: 'xai',
++        quota: {
++          status: 'success',
++          updated_at: updatedAt,
++          body: JSON.stringify({ config: { creditUsagePercent: 65 } }),
++          supplementary_body: JSON.stringify({ config: { monthlyLimit: { val: 0 } } }),
++        },
++      },
++      t
++    );
++    const error = getCachedXaiQuotaState(
++      {
++        name: 'xai-error.json',
++        type: 'xai',
++        quota: { status: 'error', status_code: 401, error: 'invalid token', updated_at: updatedAt },
++      },
++      t
++    );
++
++    expect(xai).toMatchObject({ status: 'success', billing: { usagePercent: 65 }, updatedAt });
++    expect(error).toEqual({
++      status: 'error',
++      billing: null,
++      error: 'invalid token',
++      errorStatus: 401,
++      updatedAt,
++    });
++  });
++});

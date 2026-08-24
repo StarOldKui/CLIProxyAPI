@@ -27,4 +27,5 @@ services:
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
       - ${CLI_PROXY_PLUGIN_PATH:-./plugins}:/CLIProxyAPI/plugins
       - ${CLI_PROXY_USAGE_PATH:-./usage}:/CLIProxyAPI/usage
+      - ./internal/managementasset/static/management.html:/CLIProxyAPI/static/management.html:ro
     restart: unless-stopped

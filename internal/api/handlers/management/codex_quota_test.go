@@ -249,6 +249,18 @@ func TestQuotaTargets_IncludesSupportedProviders(t *testing.T) {
 			FileName: "claude.json",
 		},
 		{
+			ID:       "xai",
+			Provider: "xai",
+			FileName: "xai.json",
+			Metadata: map[string]any{"auth_kind": "oauth"},
+		},
+		{
+			ID:         "xai-api-key",
+			Provider:   "xai",
+			FileName:   "xai-api-key.json",
+			Attributes: map[string]string{"api_key": "xai-test"},
+		},
+		{
 			ID:         "codex-api-key",
 			Provider:   "codex",
 			FileName:   "api-key.json",
@@ -272,13 +284,93 @@ func TestQuotaTargets_IncludesSupportedProviders(t *testing.T) {
 	for _, id := range gotIDs {
 		gotSet[id] = true
 	}
-	if len(gotSet) != 2 || !gotSet["codex-oauth"] || !gotSet["claude"] {
-		t.Fatalf("all targets = %#v, want codex-oauth and claude", gotIDs)
+	if len(gotSet) != 3 || !gotSet["codex-oauth"] || !gotSet["claude"] || !gotSet["xai"] {
+		t.Fatalf("all targets = %#v, want codex-oauth, claude, and xai", gotIDs)
 	}
 
 	selected := h.quotaTargets([]string{"claude.json"}, false)
 	if got := authIDs(selected); len(got) != 1 || got[0] != "claude" {
 		t.Fatalf("selected targets = %#v, want claude", got)
+	}
+}
+
+func TestRefreshXAIQuota_SavesBothBillingResponses(t *testing.T) {
+	var authorizationHeader string
+	var tokenAuthHeader string
+	var clientVersionHeader string
+	var userIDHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorizationHeader = r.Header.Get("Authorization")
+		tokenAuthHeader = r.Header.Get("X-XAI-Token-Auth")
+		clientVersionHeader = r.Header.Get("X-Grok-Client-Version")
+		userIDHeader = r.Header.Get("X-UserID")
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.RawQuery {
+		case "format=credits":
+			_, _ = w.Write([]byte(`{"config":{"monthly_limit":15000}}`))
+		default:
+			_, _ = w.Write([]byte(`{"config":{"usage_percent":51}}`))
+		}
+	}))
+	defer upstream.Close()
+	restoreXAIQuotaURLs(t, upstream.URL+"?format=credits", upstream.URL)
+
+	h, manager := newCodexQuotaTestHandler(t)
+	auth := &coreauth.Auth{
+		ID:       "xai-auth",
+		Provider: "xai",
+		FileName: "xai.json",
+		Metadata: map[string]any{
+			"access_token": "xai-access-token",
+			"auth_kind":    "oauth",
+			"sub":          "xai-user-id",
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("failed to register auth: %v", errRegister)
+	}
+
+	snapshot := h.refreshQuotaForAuth(context.Background(), auth)
+	if snapshot.Status != "success" || snapshot.StatusCode != http.StatusOK || snapshot.SupplementaryStatusCode != http.StatusOK {
+		t.Fatalf("snapshot = %#v, want both xAI billing requests successful", snapshot)
+	}
+	if snapshot.Body != `{"config":{"monthly_limit":15000}}` || snapshot.SupplementaryBody != `{"config":{"usage_percent":51}}` {
+		t.Fatalf("snapshot bodies = %q and %q", snapshot.Body, snapshot.SupplementaryBody)
+	}
+	if authorizationHeader != "Bearer xai-access-token" || tokenAuthHeader != "xai-grok-cli" || clientVersionHeader != "0.2.120" || userIDHeader != "xai-user-id" {
+		t.Fatalf("xAI headers = authorization %q, token auth %q, version %q, user ID %q", authorizationHeader, tokenAuthHeader, clientVersionHeader, userIDHeader)
+	}
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatal("expected xAI auth to remain registered")
+	}
+	persisted := quotaSnapshotFromMetadata(t, updated.Metadata)
+	if persisted.Status != "success" || persisted.Body != snapshot.Body || persisted.SupplementaryBody != snapshot.SupplementaryBody {
+		t.Fatalf("persisted snapshot = %#v, want complete xAI quota snapshot", persisted)
+	}
+}
+
+func TestRefreshXAIQuota_SucceedsWhenOneBillingEndpointIsAvailable(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery == "format=credits" {
+			http.Error(w, "credits unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"config":{"usage_percent":51}}`))
+	}))
+	defer upstream.Close()
+	restoreXAIQuotaURLs(t, upstream.URL+"?format=credits", upstream.URL)
+
+	h, manager := newCodexQuotaTestHandler(t)
+	auth := &coreauth.Auth{ID: "xai-auth", Provider: "xai", FileName: "xai.json", Metadata: map[string]any{"access_token": "xai-access-token", "auth_kind": "oauth"}}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("failed to register auth: %v", errRegister)
+	}
+
+	snapshot := h.refreshQuotaForAuth(context.Background(), auth)
+	if snapshot.Status != "success" || snapshot.StatusCode != http.StatusServiceUnavailable || snapshot.SupplementaryStatusCode != http.StatusOK {
+		t.Fatalf("snapshot = %#v, want available xAI billing response preserved", snapshot)
 	}
 }
 
@@ -452,6 +544,18 @@ func restoreCodexQuotaURL(t *testing.T, value string) {
 	codexQuotaURL = value
 	t.Cleanup(func() {
 		codexQuotaURL = oldValue
+	})
+}
+
+func restoreXAIQuotaURLs(t *testing.T, creditsURL string, billingURL string) {
+	t.Helper()
+	oldCreditsURL := xaiBillingCreditsURL
+	oldBillingURL := xaiBillingURL
+	xaiBillingCreditsURL = creditsURL
+	xaiBillingURL = billingURL
+	t.Cleanup(func() {
+		xaiBillingCreditsURL = oldCreditsURL
+		xaiBillingURL = oldBillingURL
 	})
 }
 
