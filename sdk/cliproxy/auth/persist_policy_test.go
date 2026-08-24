@@ -2,19 +2,39 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 )
 
 type countingStore struct {
 	saveCount atomic.Int32
+	saveErr   error
 }
 
 func (s *countingStore) List(context.Context) ([]*Auth, error) { return nil, nil }
 
 func (s *countingStore) Save(context.Context, *Auth) (string, error) {
 	s.saveCount.Add(1)
-	return "", nil
+	return "", s.saveErr
+}
+
+func TestUpdateKeepsRuntimeSuccessWhenPersistenceFails(t *testing.T) {
+	errSave := errors.New("save failed")
+	store := &countingStore{saveErr: errSave}
+	mgr := NewManager(store, nil, nil)
+	auth := &Auth{ID: "auth-1", Provider: "codex", Metadata: map[string]any{"type": "codex"}}
+
+	if _, err := mgr.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("Register(skipPersist) returned error: %v", err)
+	}
+	updated, errUpdate := mgr.Update(context.Background(), auth)
+	if errUpdate != nil || updated == nil {
+		t.Fatalf("Update returned auth=%v, error=%v", updated, errUpdate)
+	}
+	if errPersist := mgr.Persist(context.Background(), auth); !errors.Is(errPersist, errSave) {
+		t.Fatalf("Persist error = %v, want %v", errPersist, errSave)
+	}
 }
 
 func (s *countingStore) Delete(context.Context, string) error { return nil }

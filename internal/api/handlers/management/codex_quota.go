@@ -659,12 +659,15 @@ func (h *Handler) codexAccessToken(ctx context.Context, auth *coreauth.Auth, for
 		}
 		latest.LastRefreshedAt = now
 		latest.UpdatedAt = now
-		updated, errUpdate := h.authManager.Update(ctx, latest)
+		updated, errUpdate := h.authManager.Update(coreauth.WithSkipPersist(ctx), latest)
 		if errUpdate != nil {
 			return auth, strings.TrimSpace(tokenData.AccessToken), errUpdate
 		}
 		if updated != nil {
 			auth = updated
+		}
+		if errPersist := h.authManager.Persist(ctx, auth); errPersist != nil {
+			return auth, strings.TrimSpace(tokenData.AccessToken), errPersist
 		}
 	} else {
 		if auth.Metadata == nil {
@@ -780,10 +783,17 @@ func (h *Handler) saveQuotaSnapshot(ctx context.Context, auth *coreauth.Auth, sn
 		latest.Metadata["quota"] = snapshot
 		delete(latest.Metadata, "codex_quota")
 		latest.UpdatedAt = now.UTC()
-		_, errUpdate := h.authManager.Update(ctx, latest)
+		updated, errUpdate := h.authManager.Update(coreauth.WithSkipPersist(ctx), latest)
 		if errUpdate != nil {
 			log.WithError(errUpdate).Warnf("failed to persist quota snapshot for %s", codexQuotaResultName(auth))
 			return errUpdate
+		}
+		if updated != nil {
+			latest = updated
+		}
+		if errPersist := h.authManager.Persist(ctx, latest); errPersist != nil {
+			log.WithError(errPersist).Warnf("failed to persist quota snapshot for %s", codexQuotaResultName(auth))
+			return errPersist
 		}
 		return nil
 	}

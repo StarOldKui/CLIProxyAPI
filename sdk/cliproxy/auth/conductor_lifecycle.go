@@ -152,12 +152,12 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 		m.scheduler.upsertAuth(authClone)
 	}
 	m.queueRefreshReschedule(auth.ID)
-	errPersist := m.persist(ctx, auth)
+	_ = m.persist(ctx, auth)
 	m.hook.OnAuthUpdated(ctx, auth.Clone())
 	if cooldownStateChanged {
 		m.persistCooldownStates(ctx)
 	}
-	return auth.Clone(), errPersist
+	return auth.Clone(), nil
 }
 
 // Remove deletes an auth from runtime state without persisting.
@@ -283,4 +283,12 @@ func (m *Manager) persist(ctx context.Context, auth *Auth) error {
 	}
 	_, err := m.store.Save(ctx, auth)
 	return err
+}
+
+// Persist writes an auth entry to the configured store and returns the storage error without changing runtime state.
+func (m *Manager) Persist(ctx context.Context, auth *Auth) error {
+	if m == nil {
+		return nil
+	}
+	return m.persist(ctx, auth)
 }
