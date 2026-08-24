@@ -10,9 +10,10 @@ import iconCodex from '@/assets/icons/codex.svg';
 import iconClaude from '@/assets/icons/claude.svg';
 import iconVertex from '@/assets/icons/vertex.svg';
 import iconAmp from '@/assets/icons/amp.svg';
+import iconGrok from '@/assets/icons/grok.svg';
 import styles from './ProviderNav.module.scss';
 
-export type ProviderId = 'gemini' | 'codex' | 'claude' | 'vertex' | 'ampcode' | 'openai';
+export type ProviderId = 'gemini' | 'codex' | 'xai' | 'claude' | 'vertex' | 'ampcode' | 'openai';
 
 interface ProviderNavItem {
   id: ProviderId;
@@ -23,6 +24,7 @@ interface ProviderNavItem {
 const PROVIDERS: ProviderNavItem[] = [
   { id: 'gemini', label: 'Gemini', getIcon: () => iconGemini },
   { id: 'codex', label: 'Codex', getIcon: () => iconCodex },
+  { id: 'xai', label: 'xAI', getIcon: () => iconGrok },
   { id: 'claude', label: 'Claude', getIcon: () => iconClaude },
   { id: 'vertex', label: 'Vertex', getIcon: () => iconVertex },
   { id: 'ampcode', label: 'Ampcode', getIcon: () => iconAmp },
@@ -44,6 +46,7 @@ export function ProviderNav() {
   const itemRefs = useRef<Record<ProviderId, HTMLButtonElement | null>>({
     gemini: null,
     codex: null,
+    xai: null,
     claude: null,
     vertex: null,
     ampcode: null,

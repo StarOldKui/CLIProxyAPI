@@ -89,7 +89,7 @@ const buildCodexBaseline = (form: ProviderFormState): CodexFormBaseline => ({
   excludedModels: parseExcludedModels(form.excludedText ?? ''),
 });
 
-export function AiProvidersCodexEditPage() {
+export function AiProvidersCodexEditPage({ provider = 'codex' }: { provider?: 'codex' | 'xai' }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
@@ -130,11 +130,12 @@ export function AiProvidersCodexEditPage() {
   }, [configs, editIndex]);
 
   const invalidIndex = editIndex !== null && !initialData;
+  const configSection = provider === 'xai' ? 'xai-api-key' : 'codex-api-key';
 
   const title =
     editIndex !== null
-      ? t('ai_providers.codex_edit_modal_title')
-      : t('ai_providers.codex_add_modal_title');
+      ? t(`ai_providers.${provider}_edit_modal_title`)
+      : t(`ai_providers.${provider}_add_modal_title`);
 
   const handleBack = useCallback(() => {
     const state = location.state as LocationState;
@@ -162,7 +163,7 @@ export function AiProvidersCodexEditPage() {
     setLoading(true);
     setError('');
 
-    fetchConfig('codex-api-key')
+    fetchConfig(configSection)
       .then((value) => {
         if (cancelled) return;
         setConfigs(Array.isArray(value) ? (value as ProviderKeyConfig[]) : []);
@@ -180,7 +181,7 @@ export function AiProvidersCodexEditPage() {
     return () => {
       cancelled = true;
     };
-  }, [fetchConfig, t]);
+  }, [configSection, fetchConfig, t]);
 
   useEffect(() => {
     if (loading) return;
@@ -307,12 +308,12 @@ export function AiProvidersCodexEditPage() {
 
       if (addedCount > 0) {
         showNotification(
-          t('ai_providers.codex_models_fetch_added', { count: addedCount }),
+          t(`ai_providers.${provider}_models_fetch_added`, { count: addedCount }),
           'success'
         );
       }
     },
-    [setForm, showNotification, t]
+    [provider, setForm, showNotification, t]
   );
 
   const fetchCodexModelDiscovery = useCallback(async () => {
@@ -337,13 +338,13 @@ export function AiProvidersCodexEditPage() {
       if (modelDiscoveryRequestIdRef.current !== requestId) return;
       setDiscoveredModels([]);
       const message = getErrorMessage(err);
-      setModelDiscoveryError(`${t('ai_providers.codex_models_fetch_error')}: ${message}`);
+      setModelDiscoveryError(`${t(`ai_providers.${provider}_models_fetch_error`)}: ${message}`);
     } finally {
       if (modelDiscoveryRequestIdRef.current === requestId) {
         setModelDiscoveryFetching(false);
       }
     }
-  }, [form.apiKey, form.baseUrl, form.headers, t]);
+  }, [form.apiKey, form.baseUrl, form.headers, provider, t]);
 
   useEffect(() => {
     if (!modelDiscoveryOpen) {
@@ -438,7 +439,7 @@ export function AiProvidersCodexEditPage() {
     const trimmedBaseUrl = (form.baseUrl ?? '').trim();
     const baseUrl = trimmedBaseUrl || undefined;
     if (!baseUrl) {
-      showNotification(t('notification.codex_base_url_required'), 'error');
+      showNotification(t(`notification.${provider}_base_url_required`), 'error');
       return;
     }
 
@@ -462,13 +463,17 @@ export function AiProvidersCodexEditPage() {
           ? configs.map((item, idx) => (idx === editIndex ? payload : item))
           : [...configs, payload];
 
-      await providersApi.saveCodexConfigs(nextList);
-      updateConfigValue('codex-api-key', nextList);
-      clearCache('codex-api-key');
+      if (provider === 'xai') {
+        await providersApi.saveXAIConfigs(nextList);
+      } else {
+        await providersApi.saveCodexConfigs(nextList);
+      }
+      updateConfigValue(configSection, nextList);
+      clearCache(configSection);
       showNotification(
         editIndex !== null
-          ? t('notification.codex_config_updated')
-          : t('notification.codex_config_added'),
+          ? t(`notification.${provider}_config_updated`)
+          : t(`notification.${provider}_config_added`),
         'success'
       );
       allowNextNavigation();
@@ -485,10 +490,12 @@ export function AiProvidersCodexEditPage() {
     allowNextNavigation,
     canSave,
     clearCache,
+    configSection,
     configs,
     editIndex,
     form,
     handleBack,
+    provider,
     showNotification,
     t,
     updateConfigValue,
@@ -545,7 +552,7 @@ export function AiProvidersCodexEditPage() {
         ) : (
           <>
             <Input
-              label={t('ai_providers.codex_add_modal_key_label')}
+              label={t(`ai_providers.${provider}_add_modal_key_label`)}
               value={form.apiKey}
               onChange={(e) => setForm((prev) => ({ ...prev, apiKey: e.target.value }))}
               disabled={disableControls || saving}
@@ -575,23 +582,23 @@ export function AiProvidersCodexEditPage() {
               disabled={disableControls || saving}
             />
             <Input
-              label={t('ai_providers.codex_add_modal_url_label')}
+              label={t(`ai_providers.${provider}_add_modal_url_label`)}
               value={form.baseUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
               disabled={disableControls || saving}
             />
             <div className="form-group">
-              <label>{t('ai_providers.codex_websockets_label')}</label>
+              <label>{t(`ai_providers.${provider}_websockets_label`)}</label>
               <ToggleSwitch
                 checked={Boolean(form.websockets)}
                 onChange={(value) => setForm((prev) => ({ ...prev, websockets: value }))}
                 disabled={disableControls || saving}
-                ariaLabel={t('ai_providers.codex_websockets_label')}
+                ariaLabel={t(`ai_providers.${provider}_websockets_label`)}
               />
-              <div className="hint">{t('ai_providers.codex_websockets_hint')}</div>
+              <div className="hint">{t(`ai_providers.${provider}_websockets_hint`)}</div>
             </div>
             <Input
-              label={t('ai_providers.codex_add_modal_proxy_label')}
+              label={t(`ai_providers.${provider}_add_modal_proxy_label`)}
               value={form.proxyUrl ?? ''}
               onChange={(e) => setForm((prev) => ({ ...prev, proxyUrl: e.target.value }))}
               disabled={disableControls || saving}
@@ -610,7 +617,7 @@ export function AiProvidersCodexEditPage() {
             <div className={styles.modelConfigSection}>
               <div className={styles.modelConfigHeader}>
                 <label className={styles.modelConfigTitle}>
-                  {t('ai_providers.codex_models_label')}
+                  {t(`ai_providers.${provider}_models_label`)}
                 </label>
                 <div className={styles.modelConfigToolbar}>
                   <Button
@@ -624,7 +631,7 @@ export function AiProvidersCodexEditPage() {
                     }
                     disabled={disableControls || saving}
                   >
-                    {t('ai_providers.codex_models_add_btn')}
+                    {t(`ai_providers.${provider}_models_add_btn`)}
                   </Button>
                   <Button
                     variant="secondary"
@@ -632,11 +639,11 @@ export function AiProvidersCodexEditPage() {
                     onClick={() => setModelDiscoveryOpen(true)}
                     disabled={!canOpenModelDiscovery}
                   >
-                    {t('ai_providers.codex_models_fetch_button')}
+                    {t(`ai_providers.${provider}_models_fetch_button`)}
                   </Button>
                 </div>
               </div>
-              <div className={styles.sectionHint}>{t('ai_providers.codex_models_hint')}</div>
+              <div className={styles.sectionHint}>{t(`ai_providers.${provider}_models_hint`)}</div>
 
               <ModelInputList
                 entries={form.modelEntries}
@@ -668,7 +675,7 @@ export function AiProvidersCodexEditPage() {
 
             <Modal
               open={modelDiscoveryOpen}
-              title={t('ai_providers.codex_models_fetch_title')}
+              title={t(`ai_providers.${provider}_models_fetch_title`)}
               onClose={() => setModelDiscoveryOpen(false)}
               width={720}
               footer={
@@ -686,18 +693,18 @@ export function AiProvidersCodexEditPage() {
                     onClick={handleApplyDiscoveredModels}
                     disabled={!canApplyModelDiscovery}
                   >
-                    {t('ai_providers.codex_models_fetch_apply')}
+                    {t(`ai_providers.${provider}_models_fetch_apply`)}
                   </Button>
                 </>
               }
             >
               <div className={styles.openaiModelsContent}>
                 <div className={styles.sectionHint}>
-                  {t('ai_providers.codex_models_fetch_hint')}
+                  {t(`ai_providers.${provider}_models_fetch_hint`)}
                 </div>
                 <div className={styles.openaiModelsEndpointSection}>
                   <label className={styles.openaiModelsEndpointLabel}>
-                    {t('ai_providers.codex_models_fetch_url_label')}
+                    {t(`ai_providers.${provider}_models_fetch_url_label`)}
                   </label>
                   <div className={styles.openaiModelsEndpointControls}>
                     <input
@@ -712,13 +719,13 @@ export function AiProvidersCodexEditPage() {
                       loading={modelDiscoveryFetching}
                       disabled={disableControls || saving}
                     >
-                      {t('ai_providers.codex_models_fetch_refresh')}
+                      {t(`ai_providers.${provider}_models_fetch_refresh`)}
                     </Button>
                   </div>
                 </div>
                 <Input
-                  label={t('ai_providers.codex_models_search_label')}
-                  placeholder={t('ai_providers.codex_models_search_placeholder')}
+                  label={t(`ai_providers.${provider}_models_search_label`)}
+                  placeholder={t(`ai_providers.${provider}_models_search_placeholder`)}
                   value={modelDiscoverySearch}
                   onChange={(e) => setModelDiscoverySearch(e.target.value)}
                   disabled={modelDiscoveryFetching}
@@ -764,15 +771,15 @@ export function AiProvidersCodexEditPage() {
                 {modelDiscoveryError && <div className="error-box">{modelDiscoveryError}</div>}
                 {modelDiscoveryFetching ? (
                   <div className={styles.sectionHint}>
-                    {t('ai_providers.codex_models_fetch_loading')}
+                    {t(`ai_providers.${provider}_models_fetch_loading`)}
                   </div>
                 ) : discoveredModels.length === 0 ? (
                   <div className={styles.sectionHint}>
-                    {t('ai_providers.codex_models_fetch_empty')}
+                    {t(`ai_providers.${provider}_models_fetch_empty`)}
                   </div>
                 ) : discoveredModelsFiltered.length === 0 ? (
                   <div className={styles.sectionHint}>
-                    {t('ai_providers.codex_models_search_empty')}
+                    {t(`ai_providers.${provider}_models_search_empty`)}
                   </div>
                 ) : (
                   <div className={styles.modelDiscoveryList}>

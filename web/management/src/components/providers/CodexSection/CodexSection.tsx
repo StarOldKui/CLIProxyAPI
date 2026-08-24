@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import iconCodex from '@/assets/icons/codex.svg';
+import iconGrok from '@/assets/icons/grok.svg';
 import type { ProviderKeyConfig } from '@/types';
 import { maskApiKey } from '@/utils/format';
 import { statusBarDataFromRecentRequests } from '@/utils/recentRequests';
@@ -19,6 +20,7 @@ import {
 } from '../utils';
 
 interface CodexSectionProps {
+  provider?: 'codex' | 'xai';
   configs: ProviderKeyConfig[];
   usageByProvider: ProviderRecentUsageMap;
   loading: boolean;
@@ -31,6 +33,7 @@ interface CodexSectionProps {
 }
 
 export function CodexSection({
+  provider = 'codex',
   configs,
   usageByProvider,
   loading,
@@ -42,6 +45,7 @@ export function CodexSection({
   onToggle,
 }: CodexSectionProps) {
   const { t } = useTranslation();
+  const icon = provider === 'xai' ? iconGrok : iconCodex;
   const actionsDisabled = disableControls || loading || isSwitching;
   const toggleDisabled = disableControls || loading || isSwitching;
 
@@ -54,26 +58,26 @@ export function CodexSection({
       cache.set(
         configKey,
         statusBarDataFromRecentRequests(
-          getProviderRecentBuckets(usageByProvider, 'codex', config.apiKey, config.baseUrl)
+          getProviderRecentBuckets(usageByProvider, provider, config.apiKey, config.baseUrl)
         )
       );
     });
 
     return cache;
-  }, [configs, usageByProvider]);
+  }, [configs, provider, usageByProvider]);
 
   return (
     <>
       <Card
         title={
           <span className={styles.cardTitle}>
-            <img src={iconCodex} alt="" className={styles.cardTitleIcon} />
-            {t('ai_providers.codex_title')}
+            <img src={icon} alt="" className={styles.cardTitleIcon} />
+            {t(`ai_providers.${provider}_title`)}
           </span>
         }
         extra={
           <Button size="sm" onClick={onAdd} disabled={actionsDisabled}>
-            {t('ai_providers.codex_add_button')}
+            {t(`ai_providers.${provider}_add_button`)}
           </Button>
         }
       >
@@ -81,8 +85,8 @@ export function CodexSection({
           items={configs}
           loading={loading}
           keyField={(item, index) => getProviderConfigKey(item, index)}
-          emptyTitle={t('ai_providers.codex_empty_title')}
-          emptyDescription={t('ai_providers.codex_empty_desc')}
+          emptyTitle={t(`ai_providers.${provider}_empty_title`)}
+          emptyDescription={t(`ai_providers.${provider}_empty_desc`)}
           onEdit={(_, index) => onEdit(index)}
           onDelete={(_, index) => onDelete(index)}
           actionsDisabled={actionsDisabled}
@@ -98,7 +102,7 @@ export function CodexSection({
           renderContent={(item, index) => {
             const stats = getProviderTotalStats(
               usageByProvider,
-              'codex',
+              provider,
               item.apiKey,
               item.baseUrl
             );
@@ -111,7 +115,7 @@ export function CodexSection({
 
             return (
               <Fragment>
-                <div className="item-title">{t('ai_providers.codex_item_title')}</div>
+                <div className="item-title">{t(`ai_providers.${provider}_item_title`)}</div>
                 <div className={styles.fieldRow}>
                   <span className={styles.fieldLabel}>{t('common.api_key')}:</span>
                   <span className={styles.fieldValue}>{maskApiKey(item.apiKey)}</span>
@@ -142,7 +146,7 @@ export function CodexSection({
                 )}
                 {item.websockets !== undefined && (
                   <div className={styles.fieldRow}>
-                    <span className={styles.fieldLabel}>{t('ai_providers.codex_websockets_label')}:</span>
+                    <span className={styles.fieldLabel}>{t(`ai_providers.${provider}_websockets_label`)}:</span>
                     <span className={styles.fieldValue}>{item.websockets ? t('common.yes') : t('common.no')}</span>
                   </div>
                 )}
@@ -163,7 +167,7 @@ export function CodexSection({
                 {item.models?.length ? (
                   <div className={styles.modelTagList}>
                     <span className={styles.modelCountLabel}>
-                      {t('ai_providers.codex_models_count')}: {item.models.length}
+                      {t(`ai_providers.${provider}_models_count`)}: {item.models.length}
                     </span>
                     {item.models.map((model) => (
                       <span key={model.name} className={styles.modelTag}>

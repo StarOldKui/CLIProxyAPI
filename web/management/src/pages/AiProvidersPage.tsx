@@ -45,6 +45,9 @@ export function AiProvidersPage() {
   const [codexConfigs, setCodexConfigs] = useState<ProviderKeyConfig[]>(
     () => config?.codexApiKeys || []
   );
+  const [xaiConfigs, setXAIConfigs] = useState<ProviderKeyConfig[]>(
+    () => config?.xaiApiKeys || []
+  );
   const [claudeConfigs, setClaudeConfigs] = useState<ProviderKeyConfig[]>(
     () => config?.claudeApiKeys || []
   );
@@ -94,6 +97,7 @@ export function AiProvidersPage() {
       const data = configResult.value;
       setGeminiKeys(data?.geminiApiKeys || []);
       setCodexConfigs(data?.codexApiKeys || []);
+      setXAIConfigs(data?.xaiApiKeys || []);
       setClaudeConfigs(data?.claudeApiKeys || []);
       setVertexConfigs(data?.vertexApiKeys || []);
       setOpenaiProviders(data?.openaiCompatibility || []);
@@ -136,12 +140,14 @@ export function AiProvidersPage() {
   useEffect(() => {
     if (config?.geminiApiKeys) setGeminiKeys(config.geminiApiKeys);
     if (config?.codexApiKeys) setCodexConfigs(config.codexApiKeys);
+    if (config?.xaiApiKeys) setXAIConfigs(config.xaiApiKeys);
     if (config?.claudeApiKeys) setClaudeConfigs(config.claudeApiKeys);
     if (config?.vertexApiKeys) setVertexConfigs(config.vertexApiKeys);
     if (config?.openaiCompatibility) setOpenaiProviders(config.openaiCompatibility);
   }, [
     config?.geminiApiKeys,
     config?.codexApiKeys,
+    config?.xaiApiKeys,
     config?.claudeApiKeys,
     config?.vertexApiKeys,
     config?.openaiCompatibility,
@@ -185,7 +191,7 @@ export function AiProvidersPage() {
   };
 
   const setConfigEnabled = async (
-    provider: 'gemini' | 'codex' | 'claude' | 'vertex',
+    provider: 'gemini' | 'codex' | 'xai' | 'claude' | 'vertex',
     index: number,
     enabled: boolean
   ) => {
@@ -228,9 +234,11 @@ export function AiProvidersPage() {
     const source =
       provider === 'codex'
         ? codexConfigs
-        : provider === 'claude'
-          ? claudeConfigs
-          : vertexConfigs;
+        : provider === 'xai'
+          ? xaiConfigs
+          : provider === 'claude'
+            ? claudeConfigs
+            : vertexConfigs;
     const current = source[index];
     if (!current) return;
 
@@ -248,6 +256,10 @@ export function AiProvidersPage() {
       setCodexConfigs(nextList);
       updateConfigValue('codex-api-key', nextList);
       clearCache('codex-api-key');
+    } else if (provider === 'xai') {
+      setXAIConfigs(nextList);
+      updateConfigValue('xai-api-key', nextList);
+      clearCache('xai-api-key');
     } else if (provider === 'claude') {
       setClaudeConfigs(nextList);
       updateConfigValue('claude-api-key', nextList);
@@ -261,6 +273,8 @@ export function AiProvidersPage() {
     try {
       if (provider === 'codex') {
         await providersApi.saveCodexConfigs(nextList);
+      } else if (provider === 'xai') {
+        await providersApi.saveXAIConfigs(nextList);
       } else if (provider === 'claude') {
         await providersApi.saveClaudeConfigs(nextList);
       } else {
@@ -276,6 +290,10 @@ export function AiProvidersPage() {
         setCodexConfigs(previousList);
         updateConfigValue('codex-api-key', previousList);
         clearCache('codex-api-key');
+      } else if (provider === 'xai') {
+        setXAIConfigs(previousList);
+        updateConfigValue('xai-api-key', previousList);
+        clearCache('xai-api-key');
       } else if (provider === 'claude') {
         setClaudeConfigs(previousList);
         updateConfigValue('claude-api-key', previousList);
@@ -323,12 +341,12 @@ export function AiProvidersPage() {
     }
   };
 
-  const deleteProviderEntry = async (type: 'codex' | 'claude', index: number) => {
-    const source = type === 'codex' ? codexConfigs : claudeConfigs;
+  const deleteProviderEntry = async (type: 'codex' | 'xai' | 'claude', index: number) => {
+    const source = type === 'codex' ? codexConfigs : type === 'xai' ? xaiConfigs : claudeConfigs;
     const entry = source[index];
     if (!entry) return;
     showConfirmation({
-      title: t(`ai_providers.${type}_delete_title`, { defaultValue: `Delete ${type === 'codex' ? 'Codex' : 'Claude'} Config` }),
+      title: t(`ai_providers.${type}_delete_title`),
       message: t(`ai_providers.${type}_delete_confirm`),
       variant: 'danger',
       confirmText: t('common.confirm'),
@@ -341,6 +359,13 @@ export function AiProvidersPage() {
             updateConfigValue('codex-api-key', next);
             clearCache('codex-api-key');
             showNotification(t('notification.codex_config_deleted'), 'success');
+          } else if (type === 'xai') {
+            await providersApi.deleteXAIConfig(entry.apiKey, entry.baseUrl);
+            const next = xaiConfigs.filter((_, idx) => idx !== index);
+            setXAIConfigs(next);
+            updateConfigValue('xai-api-key', next);
+            clearCache('xai-api-key');
+            showNotification(t('notification.xai_config_deleted'), 'success');
           } else {
             await providersApi.deleteClaudeConfig(entry.apiKey, entry.baseUrl);
             const next = claudeConfigs.filter((_, idx) => idx !== index);
@@ -436,6 +461,21 @@ export function AiProvidersPage() {
             onEdit={(index) => openEditor(`/ai-providers/codex/${index}`)}
             onDelete={(index) => void deleteProviderEntry('codex', index)}
             onToggle={(index, enabled) => void setConfigEnabled('codex', index, enabled)}
+          />
+        </div>
+
+        <div id="provider-xai">
+          <CodexSection
+            provider="xai"
+            configs={xaiConfigs}
+            usageByProvider={usageByProvider}
+            loading={loading}
+            disableControls={disableControls}
+            isSwitching={isSwitching}
+            onAdd={() => openEditor('/ai-providers/xai/new')}
+            onEdit={(index) => openEditor(`/ai-providers/xai/${index}`)}
+            onDelete={(index) => void deleteProviderEntry('xai', index)}
+            onToggle={(index, enabled) => void setConfigEnabled('xai', index, enabled)}
           />
         </div>
 

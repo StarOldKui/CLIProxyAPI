@@ -115,7 +115,7 @@
 - CLI OAuth uses `sdk/auth.Manager` and provider authenticators, then persists `coreauth.Auth` through the registered global token store.
 - Management auth starts under `/v0/management/*-auth-url`; callback-backed providers use `/v0/management/oauth-callback` or provider callback routes.
 - Anthropic, Codex, Gemini, and Antigravity management OAuth register a state, return an auth URL, write `.oauth-<provider>-<state>.oauth` callback files in `auth-dir`, exchange credentials in a background goroutine, and save auth JSON.
-- xAI login is available through CLI `--xai-login` and management `/xai-auth-url`; it uses xAI OIDC discovery plus OAuth device-code authorization and stores refreshable `xai` auth records. Static xAI keys use `xai-api-key`.
+- xAI login is available through CLI `--xai-login` and the built-in management panel via `/xai-auth-url`; it uses xAI OIDC discovery plus OAuth device-code authorization and stores refreshable `xai` auth records. The panel manages static xAI keys through `xai-api-key`.
 - Kimi management auth uses device flow through `/v0/management/kimi-auth-url`; it waits for device authorization and does not use callback files.
 - Web UI OAuth requests may start temporary provider callback forwarders so vendor redirects land on the server callback routes.
 - OAuth sessions use short TTLs; callback file writers validate state/path inputs before touching auth files.

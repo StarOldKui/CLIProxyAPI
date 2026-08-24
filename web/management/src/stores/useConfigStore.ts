@@ -48,6 +48,7 @@ const SECTION_KEYS: RawConfigSection[] = [
   'ampcode',
   'gemini-api-key',
   'codex-api-key',
+  'xai-api-key',
   'claude-api-key',
   'vertex-api-key',
   'openai-compatibility',
@@ -85,6 +86,8 @@ const extractSectionValue = (config: Config | null, section?: RawConfigSection) 
       return config.geminiApiKeys;
     case 'codex-api-key':
       return config.codexApiKeys;
+    case 'xai-api-key':
+      return config.xaiApiKeys;
     case 'claude-api-key':
       return config.claudeApiKeys;
     case 'vertex-api-key':
@@ -228,6 +231,9 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
           break;
         case 'codex-api-key':
           nextConfig.codexApiKeys = value as Config['codexApiKeys'];
+          break;
+        case 'xai-api-key':
+          nextConfig.xaiApiKeys = value as Config['xaiApiKeys'];
           break;
         case 'claude-api-key':
           nextConfig.claudeApiKeys = value as Config['claudeApiKeys'];
